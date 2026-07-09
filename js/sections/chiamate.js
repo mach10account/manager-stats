@@ -13,6 +13,7 @@ let setterSort = { key: 'chiamate', dir: -1 };
 let centroSort = { key: 'chiamate', dir: -1 };
 let centroFilter = '';
 let _mount = null;
+let _renderId = 0;                // invalidato a ogni render(): scarta i load obsoleti
 
 // ── adapter: ricostruisce l'oggetto DATA dai query diretti alle viste ────────
 async function buildData(from, to, mode) {
@@ -338,18 +339,25 @@ function renderAll() {
 }
 
 async function load() {
+  const myId = _renderId;
   const status = _mount.querySelector('#chStatus');
   const content = _mount.querySelector('#chContent');
+  if (!status || !content) return;                 // DOM non montato: render obsoleto
   status.classList.remove('hidden');
   content.classList.add('hidden');
   status.textContent = 'Caricamento dati…';
   const f = getFilters();
   try {
-    DATA = await buildData(f.from, f.to, MODE);
+    const data = await buildData(f.from, f.to, MODE);
+    // stale se: un render chiamate più recente è partito (token) OPPURE il DOM è stato
+    // sostituito da un'altra sezione durante il load (#chModeHint sparito).
+    if (myId !== _renderId || !_mount.querySelector('#chModeHint')) return;
+    DATA = data;
     renderAll();
     status.classList.add('hidden');
     content.classList.remove('hidden');
   } catch (e) {
+    if (myId !== _renderId || !_mount.querySelector('#chStatus')) return;   // render obsoleto
     status.textContent = 'Errore nel caricamento: ' + e.message;
     throw e;
   }
@@ -357,6 +365,7 @@ async function load() {
 
 export async function render(mount) {
   _mount = mount;
+  _renderId++;                                     // invalida eventuali load ancora in volo
   mount.innerHTML = `
     <div class="filters" id="chMode">
       <button data-mode="chiamata" class="${MODE === 'chiamata' ? 'active' : ''}">📞 Per data chiamata</button>

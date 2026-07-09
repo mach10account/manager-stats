@@ -8,19 +8,18 @@ import { loadFreshness, clearCentriCache } from './data.js';
 import * as panoramica from './sections/panoramica.js';
 import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
-import * as trend from './sections/trend.js';
 import * as chiamate from './sections/chiamate.js';
 
 const sections = {
   '/panoramica': panoramica,
   '/marketing': marketing,
   '/coorti': coorti,
-  '/trend': trend,
   '/chiamate': chiamate,
 };
 
 const $ = id => document.getElementById(id);
 let booted = false;
+let bootPromise = null;
 let currentPath = '/panoramica';
 
 // ── auth UI ───────────────────────────────────────────────────────────────────
@@ -36,23 +35,32 @@ async function showApp() {
   $('shell').classList.remove('hidden');
   if (!booted) {
     booted = true;
-    initModal();
-    await initFilters();                       // popola consulente + range default (no dispatch)
-    document.addEventListener('filterchange', () => renderCurrent());
-    window.addEventListener('resize', debounce(() => {
-      const sec = sections[currentPath];
-      if (sec && sec.onResize) sec.onResize();
-    }, 200));
-    refreshFreshness();
-    startRouter(route => {
-      currentPath = sections[route.path] ? route.path : '/panoramica';
-      highlightNav(currentPath);
-      renderCurrent();
-    });
+    bootPromise = boot();
+    await bootPromise;
   } else {
+    // un secondo evento auth (INITIAL_SESSION → TOKEN_REFRESHED/SIGNED_IN) può arrivare
+    // mentre il primo boot è ancora in corso: aspetta che initFilters() abbia impostato il
+    // range, altrimenti renderCurrent parte con date null → 400 "date: null".
+    await bootPromise;
     refreshFreshness();
     renderCurrent();
   }
+}
+
+async function boot() {
+  initModal();
+  await initFilters();                         // popola consulente + range default (no dispatch)
+  document.addEventListener('filterchange', () => renderCurrent());
+  window.addEventListener('resize', debounce(() => {
+    const sec = sections[currentPath];
+    if (sec && sec.onResize) sec.onResize();
+  }, 200));
+  refreshFreshness();
+  startRouter(route => {
+    currentPath = sections[route.path] ? route.path : '/panoramica';
+    highlightNav(currentPath);
+    renderCurrent();
+  });
 }
 
 // ── render della sezione corrente ─────────────────────────────────────────────

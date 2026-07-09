@@ -29,6 +29,10 @@ function computeRange(days) {
   return { from, to };
 }
 
+// default sincrono del range (ultimi 30g): se un render parte prima di initFilters()
+// lo stato ha già date valide, mai null → niente 400 "invalid input syntax for type date".
+Object.assign(state, computeRange(30));
+
 function setRange(days, silent) {
   const { from, to } = computeRange(days);
   state.from = from; state.to = to;
