@@ -17,6 +17,10 @@ function computeRange(days) {
   let from;
   if (days === 'mtd') {
     from = to.slice(0, 8) + '01';
+  } else if (days === 'ieri') {
+    const y = new Date(now);
+    y.setDate(y.getDate() - 1);
+    from = to = dstr(y);
   } else if (days === 'lastm') {
     const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const last  = new Date(now.getFullYear(), now.getMonth(), 0);
@@ -50,7 +54,7 @@ export async function initFilters() {
       document.querySelectorAll('#datePresets button[data-days]').forEach(x => x.classList.remove('active'));
       b.classList.add('active');
       const v = b.dataset.days;
-      setRange(v === 'mtd' || v === 'lastm' ? v : +v);
+      setRange(/^\d+$/.test(v) ? +v : v);
     };
   });
   const apply = document.getElementById('applyCustom');
