@@ -114,7 +114,9 @@ export async function render(mount, params) {
   if (f.consulente) rows = rows.filter(r => r.consulente === f.consulente);
   _rows = rows;
 
-  mount.querySelector('#pnStatus').remove();
+  const st = mount.querySelector('#pnStatus');
+  if (!st) return;   // render obsoleto: l'utente ha cambiato sezione durante il caricamento
+  st.remove();
   if (!_rows.length) {
     mount.querySelector('#pnTable').innerHTML = '';
     mount.querySelector('#pnKpi').innerHTML = '<div class="status">Nessun dato nel periodo selezionato.</div>';

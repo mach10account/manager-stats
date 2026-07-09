@@ -67,7 +67,9 @@ export async function render(mount, params) {
   }
 
   _rows = aggregate(rows);
-  mount.querySelector('#coStatus').remove();
+  const st = mount.querySelector('#coStatus');
+  if (!st) return;   // render obsoleto: l'utente ha cambiato sezione durante il caricamento
+  st.remove();
   if (!_rows.length) {
     mount.querySelector('#coTable').innerHTML = '<tbody><tr><td class="name">Nessuna coorte disponibile.</td></tr></tbody>';
     return;

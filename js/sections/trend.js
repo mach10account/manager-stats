@@ -107,7 +107,9 @@ export async function render(mount, params) {
       .gte('giorno', f.from).lte('giorno', f.to)
       .range(lo, hi));
 
-  mount.querySelector('#trStatus').remove();
+  const st = mount.querySelector('#trStatus');
+  if (!st) return;   // render obsoleto: l'utente ha cambiato sezione durante il caricamento
+  st.remove();
   draw(mount);
 }
 

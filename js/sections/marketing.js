@@ -133,7 +133,9 @@ export async function render(mount, params) {
   if (campaign && rows.length) _ctx.campName = rows[0].campaign_name;
   if (adset && rows.length)    _ctx.adsetName = rows[0].adset_name;
 
-  mount.querySelector('#mkStatus').remove();
+  const st = mount.querySelector('#mkStatus');
+  if (!st) return;   // render obsoleto: l'utente ha cambiato sezione durante il caricamento
+  st.remove();
   if (!rows.length) {
     drawBreadcrumb(mount, P);
     mount.querySelector('#mkTable').innerHTML = '<tbody><tr><td class="name">Nessun dato nel periodo / ramo selezionato.</td></tr></tbody>';
