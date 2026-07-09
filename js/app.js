@@ -123,8 +123,9 @@ function resolve(session) { if (session) showApp(); else showLogin(); }
 initAuthUI();
 onAuthStateChange((event, session) => {
   resolved = true;
-  if (event === 'SIGNED_OUT') { showLogin(); return; }
-  if (session && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) showApp();
+  // Copre tutti i casi, incluso INITIAL_SESSION con session=null (primo accesso, non loggato)
+  if (session) showApp();
+  else showLogin();
 });
 // rete di sicurezza se INITIAL_SESSION non scatta
 setTimeout(async () => { if (!resolved) resolve(await requireSession()); }, 1200);
