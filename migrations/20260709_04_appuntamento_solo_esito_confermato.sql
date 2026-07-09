@@ -1,0 +1,16 @@
+-- 2026-07-09 · Un appuntamento conta SOLO se l'ESITO del LEAD è classe 'appuntamento'
+-- (mkt_esiti: "Appuntamento confermato", "ACCONTO PAGATO" + 2 varianti booking rare).
+-- Motivo: il campo ESITO PRENOTAZIONE sull'appuntamento è vuoto nel 97% dei casi (inutilizzabile);
+-- l'ESITO del lead (messo dalla setter) è la fonte affidabile. Esclude DISDETTO / ACCONTO NON PAGATO /
+-- attesa acconto / non interessato, che prima contavano come appuntamento e tenevano le coorti "in maturazione".
+-- Effetto verificato (coorti mag/giu): appuntamenti −18%/−22%, "in maturazione" −71%/−45%,
+-- presenze e ricavo quasi invariati (quegli appuntamenti non convertivano).
+-- Gate applicato a: mkt_lead_coorte (Coorti), agg_mkt_ad_giorno (Marketing drill-down),
+-- agg_mkt_centro_giorno (wh_* riconciliazione). Panoramica invariata (usa perf_giorno per parità col foglio).
+-- Il set esatto di esiti è editabile in public.mkt_esiti (class='appuntamento').
+
+-- Vedi il DB per il corpo completo delle 3 viste (CREATE OR REPLACE, colonne invariate).
+-- mkt_lead_coorte: has_appuntamento = (mkt_esiti.class = 'appuntamento');
+--   has_show/has_vendita/ricavo/has_pendente gated sullo stesso; has_pendente = confermato & non ancora risolto.
+-- agg_mkt_ad_giorno: lead (denominatore CPL) = TUTTI i lead dell'ad; appuntamenti/presenze/vendite/ricavo gated.
+-- agg_mkt_centro_giorno: appuntamenti/presenze/... solo da appuntamenti il cui lead ha class='appuntamento'.

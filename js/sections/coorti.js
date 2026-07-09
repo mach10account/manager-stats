@@ -5,6 +5,9 @@ import { getFilters } from '../filters.js';
 import { renderTable } from '../tables.js';
 import { fmt, eur, pctFrac, safeDiv } from '../format.js';
 
+// Le coorti pre-aprile 2026 sono sotto-contate (il DB appuntamenti è nato ~aprile): le nascondiamo.
+const COORTE_MIN = '2026-04';
+
 let sort = { key: 'mese_coorte', dir: -1 };
 let _rows = [];
 
@@ -45,7 +48,7 @@ export async function render(mount, params) {
   mount.innerHTML = `
     <div class="card">
       <h2>Coorti mensili</h2>
-      <div class="subtitle">Coorte = mese di creazione del lead. Gli eventi (app./presenze/vendite) sono attribuiti alla coorte del lead. I mesi recenti continuano a maturare.</div>
+      <div class="subtitle">Coorte = mese di creazione del lead. Gli eventi (app./presenze/vendite) sono attribuiti alla coorte del lead. Da aprile 2026 (prima il tracciamento appuntamenti non esisteva). I mesi recenti continuano a maturare.</div>
       <div class="table-scroll"><table id="coTable"></table></div>
     </div>
     <div id="coStatus" class="status">Caricamento dati…</div>`;
@@ -53,6 +56,7 @@ export async function render(mount, params) {
   let rows = await fetchAll((lo, hi) =>
     supabase.from('agg_coorte_mese_centro')
       .select('centro_id,mese_coorte,lead,lead_con_appuntamento,presenze,vendite,ricavo,potenziale,appt_pendenti')
+      .gte('mese_coorte', COORTE_MIN)
       .range(lo, hi));
 
   // filtro consulente via mappa centri
