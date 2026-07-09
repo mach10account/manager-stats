@@ -11,6 +11,7 @@ export const fmtMin = s => !s ? '—' : Math.round(s / 60).toLocaleString('it-IT
 // KPI marketing
 export const safeDiv = (a, b) => (b === null || b === undefined || b <= 0) ? null : a / b;      // frazione (o null)
 export const eur     = n => (n === null || n === undefined || isNaN(n)) ? '—' : Math.round(n).toLocaleString('it-IT') + ' €';
+export const eur2    = n => (n === null || n === undefined || isNaN(n)) ? '—' : n.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';  // costo con centesimi (CPL/CPA…)
 export const ratio   = n => (n === null || n === undefined || isNaN(n) || !isFinite(n)) ? '—' : (Math.round(n * 10) / 10).toLocaleString('it-IT') + 'x';
 export const pctFrac = frac => (frac === null || frac === undefined || isNaN(frac)) ? '—' : Math.round(frac * 100).toLocaleString('it-IT') + '%';
 

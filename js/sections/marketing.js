@@ -4,7 +4,7 @@ import { fetchAll, loadCentri, centriMap } from '../data.js';
 import { getFilters } from '../filters.js';
 import { navigate } from '../router.js';
 import { renderTable } from '../tables.js';
-import { fmt, eur, pctFrac, safeDiv, esc } from '../format.js';
+import { fmt, eur, eur2, ratio, pctFrac, safeDiv, esc } from '../format.js';
 
 let sort = { key: 'lead', dir: -1 };
 let _ctx = null;   // { rows, params } per re-sort senza refetch
@@ -19,6 +19,8 @@ const levelCols = [
   { key: 'ricavo',                label: 'Ricavo',         fmt: eur },
   { key: 'potenziale',            label: 'Potenziale',     fmt: eur },
   { key: 'spend',                 label: 'Spesa',          fmt: v => v === null || v === undefined ? '—' : eur(v) },
+  { key: 'cpl',                   label: 'CPL',            fmt: eur2 },
+  { key: 'roas',                  label: 'ROAS',           fmt: ratio },
 ];
 
 function groupBy(rows, idKey, nameKey) {
@@ -33,9 +35,15 @@ function groupBy(rows, idKey, nameKey) {
       m.set(id, a);
     }
     for (const k of SUM) a[k] += (+r[k] || 0);
-    // spend è NULL finché fb_insights_ad non è popolata → resta null (mai zeri sintetici)
+    // spend: somma solo i giorni con dato FB reale; resta null se l'ad non è in fb_insights_ad (mai zeri sintetici)
+    if (r.spend !== null && r.spend !== undefined) a.spend = (a.spend || 0) + (+r.spend || 0);
   }
-  return [...m.values()].map(a => { a.pct_app = safeDiv(a.lead_con_appuntamento, a.lead); return a; });
+  return [...m.values()].map(a => {
+    a.pct_app = safeDiv(a.lead_con_appuntamento, a.lead);
+    a.cpl  = a.spend === null ? null : safeDiv(a.spend, a.lead);    // costo per lead attribuito
+    a.roas = a.spend === null ? null : safeDiv(a.ricavo, a.spend);  // ricavo / spesa
+    return a;
+  });
 }
 
 function drawBreadcrumb(mount, params) {
@@ -103,8 +111,7 @@ export async function render(mount, params) {
   mount.innerHTML = `
     <div class="card">
       <h2>Marketing — drill-down</h2>
-      <div class="subtitle">${centroLabel ? 'Centro: <b>' + esc(centroLabel) + '</b> · ' : ''}Attribuzione per-lead. Nel periodo selezionato.</div>
-      <div class="note-info">ℹ️ Costi per-ad in arrivo — CPL/ROAS a livello ad si sbloccano con il sync FB insights.</div>
+      <div class="subtitle">${centroLabel ? 'Centro: <b>' + esc(centroLabel) + '</b> · ' : ''}Attribuzione per-lead · costi FB a livello ad (— = ad senza spesa FB nel periodo) · nel periodo selezionato.</div>
       <div class="breadcrumb" id="mkBreadcrumb"></div>
       <div class="table-scroll"><table id="mkTable"></table></div>
     </div>
