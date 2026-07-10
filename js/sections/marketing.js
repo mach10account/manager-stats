@@ -115,7 +115,7 @@ export async function render(mount, params) {
       <div class="breadcrumb" id="mkBreadcrumb"></div>
       <div class="table-scroll"><table id="mkTable"></table></div>
     </div>
-    <div id="mkStatus" class="status">Caricamento dati…</div>`;
+    <div id="mkStatus" class="status loading">Caricamento dati…</div>`;
 
   let rows = await fetchAll((lo, hi) => {
     let q = supabase.from('v_drilldown_ad')

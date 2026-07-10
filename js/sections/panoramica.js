@@ -3,8 +3,12 @@ import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
 import { getFilters } from '../filters.js';
 import { navigate } from '../router.js';
-import { renderTable, renderKpiRow } from '../tables.js';
+import { renderTable, renderKpiGroups } from '../tables.js';
 import { fmt, eur, ratio, safeDiv, pctFrac, esc } from '../format.js';
+
+// ROAS colorato: verde se >= 1 (in utile), rosso se < 1 — il numero resta l'informazione
+const roasCell = v => (v === null || v === undefined || isNaN(v)) ? '—'
+  : `<span class="${v >= 1 ? 'val-good' : 'val-bad'}">${ratio(v)}</span>`;
 
 let sort = { key: 'spesa', dir: -1 };
 let search = '';
@@ -24,7 +28,7 @@ const cols = [
   { key: 'pacchetti',      label: 'Pacchetti',    fmt: fmt },
   { key: 'cpv',            label: 'CPV',          fmt: eur },
   { key: 'ricavo',         label: 'Ricavo',       fmt: eur },
-  { key: 'roas',           label: 'ROAS',         fmt: ratio },
+  { key: 'roas',           label: 'ROAS',         fmt: roasCell },
   { key: 'potenziale',     label: 'Potenziale',   fmt: eur },
   { key: 'roas_pot',       label: 'ROAS pot.',    fmt: ratio },
   { key: 'pct_show',       label: '% Show',       fmt: pctFrac },
@@ -63,23 +67,30 @@ function draw(mount) {
   let rows = _rows;
   if (search) rows = rows.filter(r => r.centro.toLowerCase().includes(search));
 
-  // KPI azienda dai totali del range
+  // KPI azienda dai totali del range, raggruppati a funnel: investimento → appuntamenti → vendite
   const T = { spesa: 0, lead_fb: 0, appuntamenti: 0, presenze: 0, non_presentati: 0, pacchetti: 0, ricavo: 0 };
   for (const r of rows) for (const k of Object.keys(T)) T[k] += (+r[k] || 0);
-  const tiles = [
-    { label: 'Spesa',        value: eur(T.spesa) },
-    { label: 'Lead FB',      value: fmt(T.lead_fb) },
-    { label: 'CPL',          value: eur(safeDiv(T.spesa, T.lead_fb)), sub: 'spesa / lead FB' },
-    { label: 'Appuntamenti', value: fmt(T.appuntamenti) },
-    { label: 'CPA',          value: eur(safeDiv(T.spesa, T.appuntamenti)), sub: 'spesa / appuntamenti' },
-    { label: 'Presenze',     value: fmt(T.presenze) },
-    { label: '% Show',       value: pctFrac(safeDiv(T.presenze, T.presenze + T.non_presentati)), sub: 'presenze / (presenze + no show)' },
-    { label: 'Pacchetti',    value: fmt(T.pacchetti) },
-    { label: '% Chiusura',   value: pctFrac(safeDiv(T.pacchetti, T.presenze)), sub: 'pacchetti / presenze' },
-    { label: 'Ricavo',       value: eur(T.ricavo) },
-    { label: 'ROAS',         value: ratio(safeDiv(T.ricavo, T.spesa)), sub: 'ricavo / spesa' },
-  ];
-  renderKpiRow(mount.querySelector('#pnKpi'), tiles);
+  const roas = safeDiv(T.ricavo, T.spesa);
+  renderKpiGroups(mount.querySelector('#pnKpi'), [
+    { step: 1, title: 'Investimento', tiles: [
+      { label: 'Spesa ads', value: eur(T.spesa), hero: true },
+      { label: 'Lead FB',   value: fmt(T.lead_fb) },
+      { label: 'CPL',       value: eur(safeDiv(T.spesa, T.lead_fb)), sub: 'spesa / lead FB' },
+    ] },
+    { step: 2, title: 'Appuntamenti', tiles: [
+      { label: 'Appuntamenti', value: fmt(T.appuntamenti), hero: true },
+      { label: 'CPA',      value: eur(safeDiv(T.spesa, T.appuntamenti)), sub: 'spesa / app.' },
+      { label: 'Presenze', value: fmt(T.presenze) },
+      { label: '% Show',   value: pctFrac(safeDiv(T.presenze, T.presenze + T.non_presentati)), sub: 'su presenze + no show' },
+    ] },
+    { step: 3, title: 'Vendite', tiles: [
+      { label: 'Ricavo', value: eur(T.ricavo), hero: true },
+      { label: 'ROAS',   value: ratio(roas), sub: 'ricavo / spesa',
+        tone: roas === null ? undefined : (roas >= 1 ? 'good' : 'bad') },
+      { label: 'Pacchetti',  value: fmt(T.pacchetti) },
+      { label: '% Chiusura', value: pctFrac(safeDiv(T.pacchetti, T.presenze)), sub: 'pacchetti / presenze' },
+    ] },
+  ]);
 
   renderTable(mount.querySelector('#pnTable'), cols, rows, sort,
     k => { sort = { key: k, dir: sort.key === k ? -sort.dir : -1 }; draw(mount); },
@@ -93,14 +104,14 @@ function draw(mount) {
 export async function render(mount, params) {
   const f = getFilters();
   mount.innerHTML = `
-    <div class="kpi-row" id="pnKpi"></div>
+    <div class="kpi-groups" id="pnKpi"></div>
     <div class="card">
       <h2>Per centro</h2>
       <div class="subtitle">Nel periodo selezionato · KPI ricalcolati sui totali. Clicca una riga per il drill-down marketing.</div>
       <input type="search" id="pnSearch" placeholder="Cerca centro…" value="${esc(search)}">
       <div class="table-scroll"><table id="pnTable"></table></div>
     </div>
-    <div id="pnStatus" class="status">Caricamento dati…</div>`;
+    <div id="pnStatus" class="status loading">Caricamento dati…</div>`;
 
   mount.querySelector('#pnSearch').oninput = e => { search = e.target.value.toLowerCase(); draw(mount); };
 

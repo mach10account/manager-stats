@@ -51,6 +51,13 @@ export function renderLineChart(svg, labels, rows, series, opts = {}) {
   labels.forEach((d, i) => {
     if (i % nlab === 0) g += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="${cssv('--muted')}">${xlab(d)}</text>`;
   });
+  // area soffusa sotto la prima serie (solo estetica, la linea resta l'encoding)
+  if (opts.area !== false && series.length && labels.length > 1) {
+    const s0 = series[0];
+    const area = rows.map((r, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(r[s0.key]).toFixed(1)).join(' ')
+      + ` L ${x(labels.length - 1).toFixed(1)} ${H - padB} L ${x(0).toFixed(1)} ${H - padB} Z`;
+    g += `<path d="${area}" fill="${cssv(s0.color)}" fill-opacity="0.08" stroke="none"/>`;
+  }
   for (const s of series) {
     const line = rows.map((r, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(r[s.key]).toFixed(1)).join(' ');
     g += `<path d="${line}" fill="none" stroke="${cssv(s.color)}" stroke-width="2" stroke-linejoin="round"/>`;

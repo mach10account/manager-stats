@@ -49,3 +49,23 @@ export function renderKpiRow(el, tiles) {
     `<div class="tile"><div class="label">${x.label}</div><div class="value">${x.value}</div><div class="sub">${x.sub || ''}</div></div>`
   ).join('');
 }
+
+// gruppi KPI a funnel: [{ step, title, tiles: [{ label, value, sub, hero, tone }] }]
+// hero = metrica principale del gruppo (grande, su riga propria) · tone = 'good'|'bad'
+export function renderKpiGroups(el, groups) {
+  el.innerHTML = groups.map(g => `
+    <section class="kpi-group">
+      <div class="kg-head">
+        ${g.step ? `<span class="kg-step">${g.step}</span>` : ''}
+        <h3 class="kg-title">${g.title}</h3>
+      </div>
+      <div class="kg-tiles">
+        ${g.tiles.map(t => `
+          <div class="kg-tile${t.hero ? ' kg-hero' : ''}">
+            <div class="label">${t.label}</div>
+            <div class="value${t.tone ? ' val-' + t.tone : ''}">${t.value}</div>
+            ${t.sub ? `<div class="sub">${t.sub}</div>` : ''}
+          </div>`).join('')}
+      </div>
+    </section>`).join('');
+}

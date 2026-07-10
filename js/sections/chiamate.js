@@ -372,7 +372,7 @@ export async function render(mount) {
       <button data-mode="inserimento" class="${MODE === 'inserimento' ? 'active' : ''}">🌱 Per data inserimento lead</button>
       <span class="custom" id="chModeHint"></span>
     </div>
-    <div id="chStatus" class="status">Caricamento dati…</div>
+    <div id="chStatus" class="status loading">Caricamento dati…</div>
     <div id="chContent" class="hidden">
       <div class="kpi-row" id="chKpi"></div>
       <div class="card">

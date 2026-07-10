@@ -51,7 +51,7 @@ export async function render(mount, params) {
       <div class="subtitle">Coorte = mese di creazione del lead. Gli eventi (app./presenze/vendite) sono attribuiti alla coorte del lead. Da aprile 2026 (prima il tracciamento appuntamenti non esisteva). I mesi recenti continuano a maturare.</div>
       <div class="table-scroll"><table id="coTable"></table></div>
     </div>
-    <div id="coStatus" class="status">Caricamento dati…</div>`;
+    <div id="coStatus" class="status loading">Caricamento dati…</div>`;
 
   let rows = await fetchAll((lo, hi) =>
     supabase.from('agg_coorte_mese_centro')

@@ -70,7 +70,7 @@ function renderCurrent() {
   currentPath = path;
   highlightNav(path);
   const mount = $('app');
-  mount.innerHTML = '<div class="status">Caricamento…</div>';
+  mount.innerHTML = '<div class="status loading">Caricamento…</div>';
   Promise.resolve()
     .then(() => sections[path].render(mount, route.params))
     .catch(err => {
