@@ -105,7 +105,11 @@ input:focus-visible, select:focus-visible, button:focus-visible {
   box-shadow: 0 30px 80px -20px rgba(6, 24, 64, 0.55);
   text-align: center;
 }
-.login-mark { width: 66px; height: 66px; margin: 0 auto 14px; display: block; }
+.login-mark {
+  width: 96px; height: 96px; margin: 0 auto 16px; display: block;
+  border-radius: 24px; object-fit: cover;
+  box-shadow: 0 14px 34px -12px rgba(17, 60, 159, 0.6);
+}
 .login-title {
   font-family: var(--font-display); font-size: 27px; font-weight: 600;
   letter-spacing: 0.01em; margin-bottom: 6px;
@@ -155,7 +159,11 @@ header::before { /* alone di luce in alto a sinistra */
   color: #fff; opacity: 0.16; pointer-events: none; transform: rotate(195deg);
 }
 .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: #fff; position: relative; }
-.brand-mark { width: 42px; height: 42px; flex: none; }
+.brand-mark {
+  width: 42px; height: 42px; flex: none; display: block;
+  border-radius: 12px; object-fit: cover;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.55), 0 4px 12px rgba(8, 28, 80, 0.35);
+}
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
 .brand-name { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: 0.01em; }
 .brand-sub { font-size: 9px; font-weight: 700; letter-spacing: 0.32em; text-transform: uppercase; color: rgba(255, 255, 255, 0.78); margin-top: 2px; }
@@ -315,7 +323,6 @@ header::before { /* alone di luce in alto a sinistra */
 
 /* ── CHART / TOOLTIP ───────────────────────────────────────────────────── */
 svg text { font-family: inherit; }
-svg text.mark-sv { font-family: var(--font-display); }
 .chart-wrap { position: relative; }
 #tooltip {
   position: fixed; pointer-events: none; z-index: 60; display: none;
