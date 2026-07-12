@@ -20,13 +20,16 @@ async function buildData(from, to, mode) {
   const chiamata = mode === 'chiamata';
   const setterView = chiamata ? 'agg_setter_giorno' : 'agg_coorte_setter_giorno';
   const centroView = chiamata ? 'agg_centro_giorno' : 'agg_coorte_centro_giorno';
-  const [aggSetter, aggCentro, distribuzione, aggiornato_a] = await Promise.all([
+  const [aggSetter, aggCentro, distribuzione, aggiornato_a, clientiAttivi] = await Promise.all([
     fetchAll((lo, hi) => supabase.from(setterView).select('*').gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from(centroView).select('*').gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('lead_call_distribution').select('*').range(lo, hi)),
     loadFreshness().catch(() => null),
+    supabase.rpc('api_clienti_attivi', { p_from: from, p_to: to })
+      .then(r => { if (r.error) throw r.error; return r.data; })
+      .catch(() => null),                     // spesa ads assente → tile "—", mai blocco sezione
   ]);
-  return { from, to, mode, aggiornato_a, aggSetter, aggCentro, distribuzione };
+  return { from, to, mode, aggiornato_a, aggSetter, aggCentro, distribuzione, clientiAttivi };
 }
 
 // ── aggregazioni (per data chiamata) ─────────────────────────────────────────
@@ -124,6 +127,10 @@ function byCentroCoorte() {
 // ── KPI ──────────────────────────────────────────────────────────────────────
 function renderKPI() {
   const el = _mount.querySelector('#chKpi');
+  const ca = DATA.clientiAttivi;
+  const caTile = (ca && ca.giorni_con_dati)
+    ? { label: 'Clienti attivi (ads)', value: fmt(ca.n_clienti), sub: 'spesa >1 € nel periodo · media ' + fmt1(ca.media_giorno) + ' al giorno' }
+    : { label: 'Clienti attivi (ads)', value: '—', sub: 'nessun dato spesa nel periodo' };
   if (MODE === 'inserimento') {
     const t = totalsCoorte();
     renderKpiRow(el, [
@@ -134,6 +141,7 @@ function renderKPI() {
       { label: 'Tasso di risposta', value: fmtPct(pct(t.risposte, t.lead)), sub: fmt(t.risposte) + ' lead con risposta' },
       { label: 'Lavorati non correttamente', value: fmtPct(pct(t.male, t.lead)), sub: fmt(t.male) + ' lead' },
       { label: 'Acconti presi', value: fmtPct(pct(t.accP, t.accP + t.accNP)), sub: fmt(t.accP) + ' pagati / ' + fmt(t.accNP) + ' non pagati' },
+      caTile,
     ]);
     return;
   }
@@ -146,6 +154,7 @@ function renderKPI() {
     { label: 'Chiamate → Appuntamento', value: fmtPct(pct(t.appuntamenti, t.chiamate)), sub: 'appuntamenti / chiamate' },
     { label: 'Lead gestiti / giorno', value: fmt1(t.leadGiorno), sub: 'media su ' + t.giorniAttivi + ' giorni attivi' },
     { label: 'Tempo di gestione', value: fmtMin(t.talk), sub: 'totale nel periodo' },
+    caTile,
   ]);
 }
 
