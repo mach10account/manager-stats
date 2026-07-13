@@ -20,7 +20,7 @@ async function buildData(from, to, mode) {
   const chiamata = mode === 'chiamata';
   const setterView = chiamata ? 'agg_setter_giorno' : 'agg_coorte_setter_giorno';
   const centroView = chiamata ? 'agg_centro_giorno' : 'agg_coorte_centro_giorno';
-  const [aggSetter, aggCentro, distribuzione, aggiornato_a, clientiAttivi] = await Promise.all([
+  const [aggSetter, aggCentro, distribuzione, aggiornato_a, clientiAttivi, leadUnici] = await Promise.all([
     fetchAll((lo, hi) => supabase.from(setterView).select('*').gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from(centroView).select('*').gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('lead_call_distribution').select('*').range(lo, hi)),
@@ -28,8 +28,23 @@ async function buildData(from, to, mode) {
     supabase.rpc('api_clienti_attivi', { p_from: from, p_to: to })
       .then(r => { if (r.error) throw r.error; return r.data; })
       .catch(() => null),                     // spesa ads assente → tile "—", mai blocco sezione
+    chiamata                                  // lead UNICI del periodo (count distinct sull'intera finestra)
+      ? supabase.rpc('api_lead_unici', { p_from: from, p_to: to })
+          .then(r => { if (r.error) throw r.error; return r.data; })
+          .catch(() => null)                  // RPC assente/errore → fallback somma-giorni nelle tabelle
+      : Promise.resolve(null),
   ]);
-  return { from, to, mode, aggiornato_a, aggSetter, aggCentro, distribuzione, clientiAttivi };
+  return { from, to, mode, aggiornato_a, aggSetter, aggCentro, distribuzione, clientiAttivi, leadUnici };
+}
+
+// mappe (operator_id / campaign_id → lead unici) dalla RPC api_lead_unici
+function uniqMaps() {
+  const u = { setter: new Map(), centro: new Map(), totale: null };
+  for (const r of (DATA.leadUnici || [])) {
+    if (r.dim === 'totale') u.totale = +r.lead_unici;
+    else if (u[r.dim]) u[r.dim].set(r.id, +r.lead_unici);
+  }
+  return u;
 }
 
 // ── aggregazioni (per data chiamata) ─────────────────────────────────────────
@@ -45,40 +60,49 @@ function totals() {
   const days = Object.keys(leadDays).length;
   t.leadGiorno = days ? Object.values(leadDays).reduce((a, b) => a + b, 0) / days : 0;
   t.giorniAttivi = days;
+  t.leadUnici = uniqMaps().totale;            // null se la RPC non ha risposto → tile "—"
   return t;
 }
 function bySetter() {
+  const uniq = uniqMaps();
   const m = {};
   for (const r of DATA.aggSetter) {
     const k = r.setter;
-    if (!m[k]) m[k] = { setter: k, _dim: 'setter', _id: r.operator_id, chiamate: 0, risposte: 0, appuntamenti: 0, acconti: 0, lead: 0, talk: 0, giorni: 0 };
+    if (!m[k]) m[k] = { setter: k, _dim: 'setter', _id: r.operator_id, chiamate: 0, risposte: 0, appuntamenti: 0, acconti: 0, leadGG: 0, talk: 0, giorni: 0 };
     m[k].chiamate += r.chiamate; m[k].risposte += r.risposte;
     m[k].appuntamenti += r.appuntamenti; m[k].acconti += (r.acconti_pagati || 0);
-    m[k].lead += r.lead_lavorati; m[k].talk += (r.talk_sec || 0);
+    m[k].leadGG += r.lead_lavorati; m[k].talk += (r.talk_sec || 0);   // leadGG = somma dei distinti PER GIORNO (per la media Lead/giorno)
     if (r.chiamate > 0) m[k].giorni += 1;
   }
   return Object.values(m).map(s => ({
     ...s,
+    // Lead gestiti = lead UNICI nel periodo (richiami non contano); fallback somma-giorni se RPC assente
+    lead: DATA.leadUnici ? (uniq.setter.get(s._id) ?? 0) : s.leadGG,
     chGiorno: s.giorni ? s.chiamate / s.giorni : 0,
-    leadGiorno: s.giorni ? s.lead / s.giorni : 0,
+    leadGiorno: s.giorni ? s.leadGG / s.giorni : 0,
     tassoRisp: pct(s.risposte, s.chiamate),
     conv: pct(s.appuntamenti, s.chiamate),
   }));
 }
 function byCentro() {
+  const uniq = uniqMaps();
   const m = {};
   for (const r of DATA.aggCentro) {
     const k = r.centro;
-    if (!m[k]) m[k] = { centro: k, _dim: 'centro', _id: r.campaign_id, chiamate: 0, risposte: 0, appuntamenti: 0, acconti: 0, lead: 0 };
+    if (!m[k]) m[k] = { centro: k, _dim: 'centro', _id: r.campaign_id, chiamate: 0, risposte: 0, appuntamenti: 0, acconti: 0, leadGG: 0 };
     m[k].chiamate += r.chiamate; m[k].risposte += r.risposte;
     m[k].appuntamenti += r.appuntamenti; m[k].acconti += (r.acconti_pagati || 0);
-    m[k].lead += r.lead_lavorati;
+    m[k].leadGG += r.lead_lavorati;
   }
-  return Object.values(m).map(c => ({
-    ...c,
-    chPerLead: c.lead > 0 ? c.chiamate / c.lead : null,
-    conv: pct(c.appuntamenti, c.chiamate),
-  }));
+  return Object.values(m).map(c => {
+    const lead = DATA.leadUnici ? (uniq.centro.get(c._id) ?? 0) : c.leadGG;   // lead unici nel periodo
+    return {
+      ...c,
+      lead,
+      chPerLead: lead > 0 ? c.chiamate / lead : null,
+      conv: pct(c.appuntamenti, c.chiamate),
+    };
+  });
 }
 
 // ── aggregazioni COORTE (per data inserimento) ───────────────────────────────
@@ -152,7 +176,7 @@ function renderKPI() {
     { label: 'Appuntamenti', value: fmt(t.appuntamenti), sub: 'conf. / acconto pagato' },
     { label: 'Acconti pagati', value: fmt(t.acconti), sub: 'inclusi negli appuntamenti' },
     { label: 'Chiamate → Appuntamento', value: fmtPct(pct(t.appuntamenti, t.chiamate)), sub: 'appuntamenti / chiamate' },
-    { label: 'Lead gestiti / giorno', value: fmt1(t.leadGiorno), sub: 'media su ' + t.giorniAttivi + ' giorni attivi' },
+    { label: 'Lead gestiti', value: fmt(t.leadUnici), sub: 'lead unici nel periodo · media ' + fmt1(t.leadGiorno) + '/giorno' },
     { label: 'Tempo di gestione', value: fmtMin(t.talk), sub: 'totale nel periodo' },
     caTile,
   ]);
@@ -338,7 +362,11 @@ function renderAll() {
   _mount.querySelector('#chLeg2').textContent = coorte ? 'Appuntamenti (della coorte)' : 'Appuntamenti';
   _mount.querySelector('#chSetterSub').textContent = (coorte
     ? 'Lead INSERITI nel periodo, attribuiti alla setter dell\'ultima chiamata del ciclo.'
-    : 'Nel periodo selezionato. "Lead/giorno" = media dei lead distinti lavorati nei giorni attivi.')
+    : 'Nel periodo selezionato. "Lead gestiti" = lead UNICI nel periodo (3 chiamate allo stesso lead = 1 lead). "Lead/giorno" = media dei lead distinti lavorati nei giorni attivi.')
+    + ' Clicca una riga per gli esiti singoli.';
+  _mount.querySelector('#chCentroSub').textContent = (coorte
+    ? 'Nel periodo selezionato.'
+    : 'Nel periodo selezionato. "Lead lavorati" = lead UNICI nel periodo; "Chiamate/lead" = quante chiamate sono servite in media per lead.')
     + ' Clicca una riga per gli esiti singoli.';
   renderKPI();
   renderTrend();
@@ -400,7 +428,7 @@ export async function render(mount) {
       </div>
       <div class="card">
         <h2>Per centro</h2>
-        <div class="subtitle">Nel periodo selezionato. Clicca una riga per gli esiti singoli.</div>
+        <div class="subtitle" id="chCentroSub"></div>
         <input type="search" id="chSearch" placeholder="Cerca centro…" value="${centroFilter}">
         <div class="table-scroll"><table id="chCentro"></table></div>
       </div>
