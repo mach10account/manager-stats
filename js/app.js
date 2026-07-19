@@ -1,5 +1,6 @@
 // manager-stats · bootstrap: auth, router, filtri, montaggio sezioni
 import { signIn, signOut, onAuthStateChange, requireSession, isAuthError } from './supabase.js';
+import { setTrackUser, track } from './track.js';
 import { initFilters } from './filters.js';
 import { startRouter, parseHash } from './router.js';
 import { initModal } from './modal.js';
@@ -21,11 +22,15 @@ const $ = id => document.getElementById(id);
 let booted = false;
 let bootPromise = null;
 let currentPath = '/panoramica';
+let accessTracked = false;
+let lastTrackedPath = null;
 
 // ── auth UI ───────────────────────────────────────────────────────────────────
 function showLogin() {
   $('shell').classList.add('hidden');
   $('login').classList.remove('hidden');
+  accessTracked = false; // un nuovo login nella stessa tab conta come nuovo ACCESSO
+
   const pw = $('loginPassword');
   if (pw) pw.value = '';
 }
@@ -33,6 +38,7 @@ function showLogin() {
 async function showApp() {
   $('login').classList.add('hidden');
   $('shell').classList.remove('hidden');
+  if (!accessTracked) { accessTracked = true; track('ACCESSO'); }
   if (!booted) {
     booted = true;
     bootPromise = boot();
@@ -68,6 +74,7 @@ function renderCurrent() {
   const route = parseHash();
   const path = sections[route.path] ? route.path : '/panoramica';
   currentPath = path;
+  if (path !== lastTrackedPath) { lastTrackedPath = path; track('PAGINA', path); }
   highlightNav(path);
   const mount = $('app');
   mount.innerHTML = '<div class="status loading">Caricamento…</div>';
@@ -112,12 +119,17 @@ function initAuthUI() {
     btn.disabled = true; btn.textContent = 'Accesso…';
     const email = $('loginEmail').value.trim();
     const password = $('loginPassword').value;
-    const { error } = await signIn(email, password);
+    const { data, error } = await signIn(email, password);
     btn.disabled = false; btn.textContent = 'Accedi';
     if (error) { err.textContent = 'Credenziali non valide'; }
+    else {
+      setTrackUser(data && data.session && data.session.user ? data.session.user.email : email);
+      track('LOGIN');
+    }
     // il successo è gestito da onAuthStateChange (SIGNED_IN)
   });
   $('logout').addEventListener('click', async () => {
+    track('LOGOUT');
     await signOut();
     clearCentriCache();
     showLogin();
@@ -126,11 +138,15 @@ function initAuthUI() {
 
 // ── avvio ─────────────────────────────────────────────────────────────────────
 let resolved = false;
-function resolve(session) { if (session) showApp(); else showLogin(); }
+function resolve(session) {
+  setTrackUser(session && session.user ? session.user.email : null);
+  if (session) showApp(); else showLogin();
+}
 
 initAuthUI();
 onAuthStateChange((event, session) => {
   resolved = true;
+  setTrackUser(session && session.user ? session.user.email : null);
   // Copre tutti i casi, incluso INITIAL_SESSION con session=null (primo accesso, non loggato)
   if (session) showApp();
   else showLogin();
