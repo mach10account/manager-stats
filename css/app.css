@@ -442,3 +442,6 @@ footer { color: var(--muted); font-size: 11px; text-align: center; margin: 26px 
   .kg-hero .value { font-size: 26px; }
   .table-scroll { max-height: 62vh; }
 }
+
+/* Report attività nuovi/vecchi: stacco visivo tra il blocco chiamate e il blocco appuntamenti */
+#vdFunnel tr.fn-sep td { border-top: 2px solid var(--baseline); }

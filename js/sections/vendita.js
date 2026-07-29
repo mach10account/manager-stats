@@ -8,7 +8,7 @@ import { fetchAll } from '../data.js';
 import { getFilters } from '../filters.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
 import { renderLineChart, renderBarChart } from '../charts.js';
-import { fmt, fmt1, pct, fmtPct, fmtMin, safeDiv, ratio, dlab, esc } from '../format.js';
+import { fmt, fmt1, pct, fmtPct, fmtMin, eur, safeDiv, ratio, dlab, esc } from '../format.js';
 
 let DATA = null;
 let _mount = null;
@@ -19,7 +19,7 @@ let setterFilter = '';
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData(from, to) {
-  const [perGiorno, perOra, esiti, distribuzione, uniciRes, ghl] = await Promise.all([
+  const [perGiorno, perOra, esiti, distribuzione, uniciRes, ghl, funnel] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('agg_set_setter_giorno').select('*')
       .gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('agg_set_ora').select('*')
@@ -31,6 +31,8 @@ async function buildData(from, to) {
     // chiamate oggettive dal log nativo GHL — grana diversa (1 riga = 1 squillo composto)
     fetchAll((lo, hi) => supabase.from('agg_set_ghl_setter_giorno').select('*')
       .gte('giorno', from).lte('giorno', to).range(lo, hi)).catch(() => []),
+    // il report giornaliero NUOVI/VECCHI (chiamate + funnel opportunità)
+    supabase.rpc('api_set_funnel', { p_from: from, p_to: to }).then(r => r.data || []).catch(() => []),
   ]);
 
   // l'RPC ritorna una riga per setter + una riga con setter NULL = totale azienda
@@ -40,7 +42,7 @@ async function buildData(from, to) {
     if (r.setter === null) uniciTot = r;
     else uniciSetter.set(r.setter, r);
   }
-  return { perGiorno, perOra, esiti, distribuzione, uniciSetter, uniciTot, ghl };
+  return { perGiorno, perOra, esiti, distribuzione, uniciSetter, uniciTot, ghl, funnel };
 }
 
 // ── chiamate reali (GHL) ─────────────────────────────────────────────────────
@@ -330,9 +332,37 @@ function renderGhl() {
   renderGhlTable();
 }
 
+// ── report giornaliero NUOVI / VECCHI ────────────────────────────────────────
+function renderFunnel() {
+  const el = _mount.querySelector('#vdFunnel');
+  const rows = DATA.funnel || [];
+  if (!rows.length) {
+    el.innerHTML = '<div class="status">Dati funnel non ancora disponibili (il sync opportunità gira ogni ora).</div>';
+    return;
+  }
+  // (ordine, metrica) → { NUOVI, VECCHI }
+  const m = new Map();
+  for (const r of rows) {
+    let e = m.get(r.ordine);
+    if (!e) { e = { metrica: r.metrica, ordine: r.ordine, NUOVI: 0, VECCHI: 0 }; m.set(r.ordine, e); }
+    e[r.gruppo] = +r.valore || 0;
+  }
+  const lista = [...m.values()].sort((a, b) => a.ordine - b.ordine);
+  const isEuro = r => r.metrica.includes('€');
+  const f = (r, v) => isEuro(r) ? eur(v) : fmt(v);
+  let h = `<thead><tr><th></th><th>Nuovi lead</th><th>Vecchi lead</th><th>Totale</th></tr></thead><tbody>`;
+  for (const r of lista) {
+    const sep = r.ordine === 7 ? ' class="fn-sep"' : '';   // stacco tra attività chiamate e funnel appuntamenti
+    h += `<tr${sep}><td class="name">${esc(r.metrica)}</td>
+      <td>${f(r, r.NUOVI)}</td><td>${f(r, r.VECCHI)}</td><td><b>${f(r, r.NUOVI + r.VECCHI)}</b></td></tr>`;
+  }
+  el.innerHTML = h + '</tbody>';
+}
+
 // ── ciclo di rendering ───────────────────────────────────────────────────────
 function renderAll() {
   renderKPI();
+  renderFunnel();
   renderTrend();
   renderSetterTable();
   renderGhl();
@@ -375,6 +405,14 @@ export async function render(mount) {
     <div id="vdStatus" class="status loading">Caricamento dati…</div>
     <div id="vdContent" class="hidden">
       <div class="kpi-groups" id="vdKpi"></div>
+
+      <div class="card">
+        <h2>Report attività — nuovi vs vecchi lead</h2>
+        <div class="subtitle"><strong>Nuovo</strong> = contatto la cui prima chiamata di sempre cade nel periodo selezionato; tutto il resto è vecchio.
+          Le righe chiamate contano gli esiti registrati dai setter; le righe appuntamenti/chiusure vengono dalla pipeline GHL
+          (stage attuale + quando ci è entrata). "Da svolgere" = opportunità <em>attualmente</em> in uno stage fissato, senza filtro periodo.</div>
+        <div class="table-scroll"><table id="vdFunnel"></table></div>
+      </div>
 
       <div class="card">
         <h2>Andamento giornaliero</h2>
