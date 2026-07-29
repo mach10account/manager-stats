@@ -32,7 +32,8 @@ async function buildData(from, to) {
     fetchAll((lo, hi) => supabase.from('agg_set_ghl_setter_giorno').select('*')
       .gte('giorno', from).lte('giorno', to).range(lo, hi)).catch(() => []),
     // il report giornaliero NUOVI/VECCHI (chiamate + funnel opportunità)
-    supabase.rpc('api_set_funnel', { p_from: from, p_to: to }).then(r => r.data || []).catch(() => []),
+    supabase.rpc('api_set_funnel', { p_from: from, p_to: to, p_setter: funnelSetter || null })
+      .then(r => r.data || []).catch(() => []),
   ]);
 
   // l'RPC ritorna una riga per setter + una riga con setter NULL = totale azienda
@@ -333,11 +334,36 @@ function renderGhl() {
 }
 
 // ── report giornaliero NUOVI / VECCHI ────────────────────────────────────────
+let funnelSetter = '';          // '' = tutti
+let _funnelReqId = 0;
+
+// popolamento del filtro: i setter visti nel periodo (stessi nomi normalizzati del resto)
+function renderFunnelFilter() {
+  const sel = _mount.querySelector('#vdFunnelSetter');
+  if (!sel) return;
+  const nomi = [...new Set((DATA.perGiorno || []).map(r => r.setter).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  sel.innerHTML = '<option value="">Tutti i setter</option>' +
+    nomi.map(n => `<option value="${esc(n)}"${n === funnelSetter ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  sel.onchange = async () => {
+    funnelSetter = sel.value;
+    const myId = ++_funnelReqId;
+    const el = _mount.querySelector('#vdFunnel');
+    el.innerHTML = '<tbody><tr><td class="name">Caricamento…</td></tr></tbody>';
+    const f = getFilters();
+    const { data } = await supabase.rpc('api_set_funnel',
+      { p_from: f.from, p_to: f.to, p_setter: funnelSetter || null }).catch(() => ({ data: null }));
+    if (myId !== _funnelReqId || !_mount.querySelector('#vdFunnel')) return;   // risposta obsoleta
+    DATA.funnel = data || [];
+    renderFunnel();
+  };
+}
+
 function renderFunnel() {
   const el = _mount.querySelector('#vdFunnel');
   const rows = DATA.funnel || [];
   if (!rows.length) {
-    el.innerHTML = '<div class="status">Dati funnel non ancora disponibili (il sync opportunità gira ogni ora).</div>';
+    el.innerHTML = '<div class="status">Nessun dato nel periodo' + (funnelSetter ? ' per ' + esc(funnelSetter) : '') + '.</div>';
     return;
   }
   // (ordine, metrica) → { NUOVI, VECCHI }
@@ -362,6 +388,7 @@ function renderFunnel() {
 // ── ciclo di rendering ───────────────────────────────────────────────────────
 function renderAll() {
   renderKPI();
+  renderFunnelFilter();
   renderFunnel();
   renderTrend();
   renderSetterTable();
@@ -409,8 +436,13 @@ export async function render(mount) {
       <div class="card">
         <h2>Report attività — nuovi vs vecchi lead</h2>
         <div class="subtitle"><strong>Nuovo</strong> = contatto la cui prima chiamata di sempre cade nel periodo selezionato; tutto il resto è vecchio.
-          Le righe chiamate contano gli esiti registrati dai setter; le righe appuntamenti/chiusure vengono dalla pipeline GHL
-          (stage attuale + quando ci è entrata). "Da svolgere" = opportunità <em>attualmente</em> in uno stage fissato, senza filtro periodo.</div>
+          Le righe chiamate contano gli esiti del setter scelto; le righe appuntamenti/chiusure vengono dalla pipeline GHL,
+          attribuite al setter tramite i <strong>follower</strong> dell'opportunità (se l'opportunità non ha follower: chi ne ha fissato l'appuntamento).
+          "Da svolgere" = entrata in uno stage fissato nel periodo e ancora lì.</div>
+        <div class="filters" style="margin-bottom:10px">
+          <span class="filter-cap">Setter</span>
+          <label class="consulente-wrap"><select id="vdFunnelSetter"><option value="">Tutti i setter</option></select></label>
+        </div>
         <div class="table-scroll"><table id="vdFunnel"></table></div>
       </div>
 
