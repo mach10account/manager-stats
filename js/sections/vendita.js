@@ -15,11 +15,12 @@ let _mount = null;
 let _renderId = 0;
 let setterSort = { key: 'chiamate', dir: -1 };
 let ghlSort = { key: 'chiamate', dir: -1 };
+let stlSort = { key: 'primi_contatti', dir: -1 };
 let setterFilter = '';
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData(from, to) {
-  const [perGiorno, perOra, esiti, distribuzione, uniciRes, ghl, funnel] = await Promise.all([
+  const [perGiorno, perOra, esiti, distribuzione, uniciRes, ghl, funnel, stl] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('agg_set_setter_giorno').select('*')
       .gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('agg_set_ora').select('*')
@@ -34,6 +35,10 @@ async function buildData(from, to) {
     // il report giornaliero NUOVI/VECCHI (chiamate + funnel opportunità)
     supabase.rpc('api_set_funnel', { p_from: from, p_to: to, p_setter: funnelSetter || null })
       .then(r => r.data || []).catch(() => []),
+    // speed to lead — una riga per lead ENTRATO nel periodo (non per chiamata fatta)
+    fetchAll((lo, hi) => supabase.from('v_set_speed_to_lead')
+      .select('minuti,setter,fascia,in_attesa,saltato')
+      .gte('giorno_entrata', from).lte('giorno_entrata', to).range(lo, hi)).catch(() => []),
   ]);
 
   // l'RPC ritorna una riga per setter + una riga con setter NULL = totale azienda
@@ -43,7 +48,59 @@ async function buildData(from, to) {
     if (r.setter === null) uniciTot = r;
     else uniciSetter.set(r.setter, r);
   }
-  return { perGiorno, perOra, esiti, distribuzione, uniciSetter, uniciTot, ghl, funnel };
+  return { perGiorno, perOra, esiti, distribuzione, uniciSetter, uniciTot, ghl, funnel, stl };
+}
+
+// ── speed to lead ────────────────────────────────────────────────────────────
+// durata leggibile: 4 min · 1h 20m · 2g 4h
+const durata = m => {
+  if (m === null || m === undefined || isNaN(m)) return '—';
+  if (m < 60) return Math.round(m) + ' min';
+  if (m < 1440) { const h = Math.floor(m / 60), r = Math.round(m % 60); return h + 'h' + (r ? ' ' + r + 'm' : ''); }
+  const g = Math.floor(m / 1440), h = Math.round((m % 1440) / 60);
+  return g + 'g' + (h ? ' ' + h + 'h' : '');
+};
+
+const mediana = arr => {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const i = Math.floor(s.length / 2);
+  return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2;
+};
+
+const FASCE = ['entro 5 min', '5-30 min', '30-60 min', '1-4 ore', '4-24 ore',
+               '1-3 giorni', 'oltre 3 giorni', 'mai chiamato', 'in attesa'];
+
+function stlTotali() {
+  const r = DATA.stl || [];
+  const chiamati = r.filter(x => x.minuti !== null && x.minuti !== undefined);
+  const min = chiamati.map(x => +x.minuti);
+  return {
+    lead: r.length,
+    chiamati: chiamati.length,
+    inAttesa: r.filter(x => x.in_attesa).length,
+    saltati: r.filter(x => x.saltato).length,
+    mediana: mediana(min),
+    entro1h: min.filter(m => m <= 60).length,
+    entro24h: min.filter(m => m <= 1440).length,
+  };
+}
+
+function stlBySetter() {
+  const m = new Map();
+  for (const r of (DATA.stl || [])) {
+    if (r.minuti === null || r.minuti === undefined) continue;   // la prima chiamata non c'è: nessuno da attribuire
+    const k = r.setter || '(sconosciuto)';
+    if (!m.has(k)) m.set(k, { setter: k, minuti: [] });
+    m.get(k).minuti.push(+r.minuti);
+  }
+  return [...m.values()].map(a => ({
+    setter: a.setter,
+    primi_contatti: a.minuti.length,
+    mediana: mediana(a.minuti),
+    entro1h: pct(a.minuti.filter(x => x <= 60).length, a.minuti.length),
+    entro24h: pct(a.minuti.filter(x => x <= 1440).length, a.minuti.length),
+  }));
 }
 
 // ── chiamate reali (GHL) ─────────────────────────────────────────────────────
@@ -385,9 +442,56 @@ function renderFunnel() {
   el.innerHTML = h + '</tbody>';
 }
 
+// ── card speed to lead ───────────────────────────────────────────────────────
+const stlCols = [
+  { key: 'setter',         label: 'Setter' },
+  { key: 'primi_contatti', label: 'Primi contatti', fmt },
+  { key: 'mediana',        label: 'Mediana',        fmt: durata },
+  { key: 'entro1h',        label: 'Entro 1 ora',    fmt: fmtPct, good: true, goodMin: 25 },
+  { key: 'entro24h',       label: 'Entro 24 ore',   fmt: fmtPct, good: true, goodMin: 70 },
+];
+
+function renderStl() {
+  const t = stlTotali();
+  if (!t.lead) {
+    _mount.querySelector('#vdStl').innerHTML =
+      '<div class="status">Nessun lead entrato nel periodo selezionato.</div>';
+    return;
+  }
+  renderKpiRow(_mount.querySelector('#vdStlKpi'), [
+    { label: 'Lead entrati', value: fmt(t.lead), sub: 'nel periodo' },
+    { label: 'Tempo mediano', value: durata(t.mediana), sub: 'dall\'ingresso al primo squillo' },
+    { label: 'Entro 1 ora', value: fmtPct(pct(t.entro1h, t.chiamati)), sub: fmt(t.entro1h) + ' lead' },
+    { label: 'Entro 24 ore', value: fmtPct(pct(t.entro24h, t.chiamati)), sub: fmt(t.entro24h) + ' lead' },
+    { label: 'Mai chiamati', value: fmt(t.saltati), sub: fmtPct(pct(t.saltati, t.lead)) + ' dei lead entrati' },
+    { label: 'In attesa', value: fmt(t.inAttesa), sub: 'entrati da meno di 24 ore' },
+  ]);
+
+  // distribuzione: "in attesa" resta fuori dal grafico, non è un ritardo
+  const conta = new Map(FASCE.map(f => [f, 0]));
+  for (const r of DATA.stl) conta.set(r.fascia, (conta.get(r.fascia) || 0) + 1);
+  const buckets = FASCE.filter(f => f !== 'in attesa').map(f => ({
+    label: f === 'mai chiamato' ? 'mai' : f.replace(' min', 'm').replace(' ore', 'h').replace(' giorni', 'g'),
+    value: conta.get(f) || 0,
+    subLabel: fmtPct(pct(conta.get(f) || 0, t.lead - t.inAttesa)),
+    _f: f,
+  }));
+  renderBarChart(_mount.querySelector('#vdStlChart'), buckets, {
+    footer: 'tempo dall\'ingresso del lead al primo squillo — sotto: quota sui lead entrati',
+    tip: b => `<div class="t-date">${b._f}</div>
+      <div class="t-row"><span>Lead</span><b>${fmt(b.value)}</b></div>
+      <div class="t-row"><span>Quota</span><b>${b.subLabel}</b></div>`,
+  });
+
+  renderTable(_mount.querySelector('#vdStlTable'), stlCols, stlBySetter(), stlSort,
+    k => { stlSort = { key: k, dir: stlSort.key === k ? -stlSort.dir : -1 }; renderStl(); },
+    { barKey: 'primi_contatti' });
+}
+
 // ── ciclo di rendering ───────────────────────────────────────────────────────
 function renderAll() {
   renderKPI();
+  renderStl();
   renderFunnelFilter();
   renderFunnel();
   renderTrend();
@@ -411,8 +515,10 @@ async function load() {
     const data = await buildData(f.from, f.to);
     if (myId !== _renderId || !_mount.querySelector('#vdContent')) return;   // render obsoleto
     DATA = data;
-    if (!data.perGiorno.length) {
-      status.textContent = 'Nessuna chiamata nel periodo selezionato.';
+    // basta UNA delle due fonti: a inizio giornata ci sono lead entrati e ancora zero
+    // esiti registrati, e lo speed to lead è proprio quello che serve vedere in quel momento
+    if (!data.perGiorno.length && !data.stl.length) {
+      status.textContent = 'Nessuna attività nel periodo selezionato.';
       return;
     }
     renderAll();
@@ -432,6 +538,18 @@ export async function render(mount) {
     <div id="vdStatus" class="status loading">Caricamento dati…</div>
     <div id="vdContent" class="hidden">
       <div class="kpi-groups" id="vdKpi"></div>
+
+      <div class="card">
+        <h2>Speed to lead</h2>
+        <div class="subtitle">Quanto passa fra l'ingresso del lead in pipeline e il <strong>primo squillo</strong>.
+          Una riga per lead <em>entrato</em> nel periodo (non per chiamata fatta), quindi il filtro periodo qui seleziona la data di ingresso.
+          "Mai chiamati" conta solo chi è entrato da oltre 24 ore: chi è arrivato stamattina sta in "In attesa".</div>
+        <div class="kpi-row" id="vdStlKpi"></div>
+        <div id="vdStl">
+          <div class="chart-wrap"><svg id="vdStlChart" width="100%" height="240"></svg></div>
+          <div class="table-scroll" style="margin-top:14px"><table id="vdStlTable"></table></div>
+        </div>
+      </div>
 
       <div class="card">
         <h2>Report attività — nuovi vs vecchi lead</h2>
@@ -503,5 +621,5 @@ export async function render(mount) {
 }
 
 export function onResize() {
-  if (DATA && _mount && _mount.querySelector('#vdTrend')) { renderTrend(); renderOre(); renderDist(); }
+  if (DATA && _mount && _mount.querySelector('#vdTrend')) { renderTrend(); renderOre(); renderDist(); renderStl(); }
 }
