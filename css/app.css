@@ -445,3 +445,12 @@ footer { color: var(--muted); font-size: 11px; text-align: center; margin: 26px 
 
 /* Report attività nuovi/vecchi: stacco visivo tra il blocco chiamate e il blocco appuntamenti */
 #vdFunnel tr.fn-sep td { border-top: 2px solid var(--baseline); }
+
+/* Pannello Accessi: caselle e feedback di salvataggio in riga */
+#acTable input[type=checkbox] { width: 17px; height: 17px; cursor: pointer; accent-color: var(--sv-royal); }
+#acTable input[type=checkbox]:disabled { cursor: default; opacity: .45; }
+#acTable button.ac-save { font: inherit; font-size: 12px; font-weight: 600; padding: 5px 12px; cursor: pointer;
+  background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; }
+#acTable button.ac-save:hover:not(:disabled) { background: var(--row-hover); }
+#acTable button.ac-save:disabled { opacity: .5; cursor: default; }
+.ac-msg { font-size: 12px; margin-left: 8px; color: var(--muted); }

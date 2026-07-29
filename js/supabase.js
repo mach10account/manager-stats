@@ -27,12 +27,14 @@ export function onAuthStateChange(cb) {
   return supabase.auth.onAuthStateChange(cb);
 }
 
-// Errore JWT / permessi → forza il re-login
+// Errore di SESSIONE (jwt scaduto/assente) → forza il re-login.
+// NB: "permission denied" NON va qui. Da quando esistono gli accessi per sezione
+// (ms_accessi) è un errore di autorizzazione, non di autenticazione: trattarlo come
+// sessione scaduta manderebbe l'utente in loop login → sezione negata → login.
 export function isAuthError(err) {
   if (!err) return false;
   const code = String(err.code || err.status || '');
   const msg = String(err.message || '').toLowerCase();
   return code === 'PGRST301' || code === '401' ||
-         msg.includes('jwt') || msg.includes('permission denied') ||
-         msg.includes('not authenticated');
+         msg.includes('jwt') || msg.includes('not authenticated');
 }

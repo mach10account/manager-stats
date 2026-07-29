@@ -1,24 +1,43 @@
 // manager-stats · bootstrap: auth, router, filtri, montaggio sezioni
-import { signIn, signOut, onAuthStateChange, requireSession, isAuthError } from './supabase.js';
+import { signIn, signOut, onAuthStateChange, requireSession, isAuthError, supabase } from './supabase.js';
 import { setTrackUser, track } from './track.js';
 import { initFilters } from './filters.js';
-import { startRouter, parseHash } from './router.js';
+import { startRouter, parseHash, navigate } from './router.js';
 import { initModal } from './modal.js';
 import { loadFreshness, clearCentriCache } from './data.js';
 
 import * as panoramica from './sections/panoramica.js';
 import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
-import * as chiamate from './sections/chiamate.js';
+import * as beauty from './sections/beauty.js';
 import * as vendita from './sections/vendita.js';
+import * as accessi from './sections/accessi.js';
 
 const sections = {
   '/panoramica': panoramica,
   '/marketing': marketing,
   '/coorti': coorti,
-  '/chiamate': chiamate,
+  '/beauty': beauty,
   '/vendita': vendita,
+  '/accessi': accessi,
 };
+
+// path → permesso richiesto (stessa chiave di data-sezione in index.html)
+const permessoDi = {
+  '/panoramica': 'panoramica',
+  '/marketing': 'marketing',
+  '/coorti': 'coorti',
+  '/beauty': 'beauty',
+  '/vendita': 'vendita',
+  '/accessi': 'admin',
+};
+const ALIAS = { '/chiamate': '/beauty' };   // la sezione si chiamava Chiamate: i vecchi link continuano a funzionare
+
+let MIE_SEZIONI = [];
+const isAdmin = () => MIE_SEZIONI.includes('admin');
+const puo = sez => isAdmin() || MIE_SEZIONI.includes(sez);
+const pathConsentito = p => !!sections[p] && puo(permessoDi[p]);
+const primoConsentito = () => Object.keys(sections).find(pathConsentito) || null;
 
 const $ = id => document.getElementById(id);
 let booted = false;
@@ -32,6 +51,14 @@ function showLogin() {
   $('shell').classList.add('hidden');
   $('login').classList.remove('hidden');
   accessTracked = false; // un nuovo login nella stessa tab conta come nuovo ACCESSO
+
+  // Se nella stessa tab entra un altro utente, boot() deve rigirare: altrimenti si
+  // porterebbe dietro i permessi (e la nav) di chi c'era prima.
+  booted = false;
+  bootPromise = null;
+  MIE_SEZIONI = [];
+  lastTrackedPath = null;
+  clearCentriCache();
 
   const pw = $('loginPassword');
   if (pw) pw.value = '';
@@ -56,6 +83,7 @@ async function showApp() {
 }
 
 async function boot() {
+  await caricaPermessi();                      // prima di tutto: decide cosa esiste per questo utente
   initModal();
   await initFilters();                         // popola consulente + range default (no dispatch)
   document.addEventListener('filterchange', () => renderCurrent());
@@ -64,21 +92,43 @@ async function boot() {
     if (sec && sec.onResize) sec.onResize();
   }, 200));
   refreshFreshness();
-  startRouter(route => {
-    currentPath = sections[route.path] ? route.path : '/panoramica';
-    highlightNav(currentPath);
-    renderCurrent();
-  });
+  startRouter(() => renderCurrent());
+}
+
+// ── permessi ──────────────────────────────────────────────────────────────────
+async function caricaPermessi() {
+  try {
+    const { data } = await supabase.rpc('ms_mie_sezioni');
+    MIE_SEZIONI = Array.isArray(data) ? data : [];
+  } catch (e) {
+    MIE_SEZIONI = [];                          // in dubbio non si mostra nulla
+  }
+  document.querySelectorAll('#nav a[data-sezione]').forEach(a =>
+    a.classList.toggle('hidden', !puo(a.dataset.sezione)));
 }
 
 // ── render della sezione corrente ─────────────────────────────────────────────
 function renderCurrent() {
   const route = parseHash();
-  const path = sections[route.path] ? route.path : '/panoramica';
+  const mount = $('app');
+
+  let path = ALIAS[route.path] || route.path;
+  if (!pathConsentito(path)) {
+    const fallback = primoConsentito();
+    if (!fallback) {                           // utente senza alcuna sezione assegnata
+      highlightNav(null);
+      mount.innerHTML = `<div class="card"><h2>Nessun accesso assegnato</h2>
+        <div class="subtitle">Il tuo account è attivo ma non ha ancora nessuna sezione abilitata.
+        Chiedi a Leo di assegnartele, poi ricarica la pagina.</div></div>`;
+      return;
+    }
+    navigate(fallback);                        // ri-entra da hashchange
+    return;
+  }
+
   currentPath = path;
   if (path !== lastTrackedPath) { lastTrackedPath = path; track('PAGINA', path); }
   highlightNav(path);
-  const mount = $('app');
   mount.innerHTML = '<div class="status loading">Caricamento…</div>';
   Promise.resolve()
     .then(() => sections[path].render(mount, route.params))
