@@ -6,19 +6,20 @@
 import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
 import { getFilters } from '../filters.js';
-import { renderTable, renderKpiGroups } from '../tables.js';
+import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
 import { renderLineChart, renderBarChart } from '../charts.js';
-import { fmt, fmt1, pct, fmtPct, safeDiv, ratio, dlab, esc } from '../format.js';
+import { fmt, fmt1, pct, fmtPct, fmtMin, safeDiv, ratio, dlab, esc } from '../format.js';
 
 let DATA = null;
 let _mount = null;
 let _renderId = 0;
 let setterSort = { key: 'chiamate', dir: -1 };
+let ghlSort = { key: 'chiamate', dir: -1 };
 let setterFilter = '';
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData(from, to) {
-  const [perGiorno, perOra, esiti, distribuzione, uniciRes] = await Promise.all([
+  const [perGiorno, perOra, esiti, distribuzione, uniciRes, ghl] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('agg_set_setter_giorno').select('*')
       .gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('agg_set_ora').select('*')
@@ -27,6 +28,9 @@ async function buildData(from, to) {
       .gte('giorno', from).lte('giorno', to).range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('set_tentativi_dist').select('*').range(lo, hi)),
     supabase.rpc('api_set_contatti_unici', { p_from: from, p_to: to }).then(r => r.data || []).catch(() => []),
+    // chiamate oggettive dal log nativo GHL — grana diversa (1 riga = 1 squillo composto)
+    fetchAll((lo, hi) => supabase.from('agg_set_ghl_setter_giorno').select('*')
+      .gte('giorno', from).lte('giorno', to).range(lo, hi)).catch(() => []),
   ]);
 
   // l'RPC ritorna una riga per setter + una riga con setter NULL = totale azienda
@@ -36,7 +40,35 @@ async function buildData(from, to) {
     if (r.setter === null) uniciTot = r;
     else uniciSetter.set(r.setter, r);
   }
-  return { perGiorno, perOra, esiti, distribuzione, uniciSetter, uniciTot };
+  return { perGiorno, perOra, esiti, distribuzione, uniciSetter, uniciTot, ghl };
+}
+
+// ── chiamate reali (GHL) ─────────────────────────────────────────────────────
+const GHLNUM = ['chiamate', 'connesse', 'conversazioni', 'secondi', 'senza_esito',
+                'conversazioni_senza_esito', 'non_risposte', 'non_partite'];
+
+function ghlBySetter() {
+  const m = new Map();
+  for (const r of (DATA.ghl || [])) {
+    const k = r.setter || '(sconosciuto)';
+    let a = m.get(k);
+    if (!a) { a = { setter: k }; for (const n of GHLNUM) a[n] = 0; m.set(k, a); }
+    for (const n of GHLNUM) a[n] += (+r[n] || 0);
+  }
+  return [...m.values()].map(a => {
+    a.pctConnesse   = pct(a.connesse, a.chiamate);
+    a.minuti        = a.secondi;
+    a.durataMedia   = a.connesse ? a.secondi / a.connesse : null;   // secondi medi quando qualcuno risponde
+    a.pctSenzaEsito = pct(a.senza_esito, a.chiamate);
+    return a;
+  });
+}
+
+function ghlTotali() {
+  const t = {};
+  for (const n of GHLNUM) t[n] = 0;
+  for (const r of (DATA.ghl || [])) for (const n of GHLNUM) t[n] += (+r[n] || 0);
+  return t;
 }
 
 // ── aggregazioni ─────────────────────────────────────────────────────────────
@@ -255,11 +287,55 @@ function renderSetterTable() {
     { barKey: 'chiamate' });
 }
 
+// ── tabella chiamate reali (GHL) ─────────────────────────────────────────────
+const ghlCols = [
+  { key: 'setter',        label: 'Setter' },
+  { key: 'chiamate',      label: 'Composte',      fmt },
+  { key: 'connesse',      label: 'Connesse',      fmt },
+  { key: 'pctConnesse',   label: '% connesse',    fmt: fmtPct },
+  { key: 'conversazioni', label: 'Conversazioni', fmt },
+  { key: 'secondi',       label: 'Al telefono',   fmt: fmtMin },
+  { key: 'durataMedia',   label: 'Durata media',  fmt: v => v === null ? '—' : Math.round(v) + ' s' },
+  { key: 'senza_esito',   label: 'Senza esito',   fmt },
+  { key: 'pctSenzaEsito', label: '% senza esito', fmt: fmtPct },
+  { key: 'non_partite',   label: 'Non partite',   fmt },
+];
+
+function renderGhlTable() {
+  const rows = ghlBySetter();
+  const el = _mount.querySelector('#vdGhlTable');
+  if (!rows.length) { el.innerHTML = ''; return; }
+  renderTable(el, ghlCols, rows, ghlSort,
+    k => { ghlSort = { key: k, dir: ghlSort.key === k ? -ghlSort.dir : -1 }; renderGhlTable(); },
+    { barKey: 'chiamate' });
+}
+
+function renderGhl() {
+  const wrap = _mount.querySelector('#vdGhl');
+  if (!DATA.ghl || !DATA.ghl.length) {
+    wrap.innerHTML = '<div class="status">Nessuna chiamata registrata da GoHighLevel nel periodo.</div>';
+    return;
+  }
+  const t = ghlTotali();
+  renderKpiRow(_mount.querySelector('#vdGhlKpi'), [
+    { label: 'Chiamate composte', value: fmt(t.chiamate), sub: 'squilli effettivi, non esiti' },
+    { label: 'Connesse', value: fmt(t.connesse), sub: fmtPct(pct(t.connesse, t.chiamate)) + ' di risposta reale' },
+    { label: 'Conversazioni', value: fmt(t.conversazioni), sub: 'oltre 30 secondi' },
+    { label: 'Al telefono', value: fmtMin(t.secondi), sub: 'tempo parlato totale' },
+    { label: 'Durata media', value: t.connesse ? Math.round(t.secondi / t.connesse) + ' s' : '—', sub: 'quando rispondono' },
+    { label: 'Senza esito', value: fmt(t.senza_esito), sub: fmtPct(pct(t.senza_esito, t.chiamate)) + ' delle chiamate' },
+    { label: 'Conversazioni perse', value: fmt(t.conversazioni_senza_esito), sub: 'oltre 30s e mai registrate' },
+    { label: 'Non partite', value: fmt(t.non_partite), sub: 'errore tecnico o annullate' },
+  ]);
+  renderGhlTable();
+}
+
 // ── ciclo di rendering ───────────────────────────────────────────────────────
 function renderAll() {
   renderKPI();
   renderTrend();
   renderSetterTable();
+  renderGhl();
   renderOre();
   renderDist();
   renderEsiti();
@@ -318,6 +394,15 @@ export async function render(mount) {
           "Appuntamenti" esclude le conferme, che riguardano appuntamenti già presi. Il filtro Consulente non si applica: i setter lavorano l'acquisizione, non i centri clienti.</div>
         <input type="search" id="vdSearch" placeholder="Cerca setter…" value="${esc(setterFilter)}">
         <div class="table-scroll"><table id="vdSetter"></table></div>
+      </div>
+
+      <div class="card">
+        <h2>Al telefono davvero</h2>
+        <div class="subtitle">Chiamate registrate da GoHighLevel: qui una riga è uno <strong>squillo effettivamente composto</strong>, non un esito dichiarato.
+          "Connesse" = la linea si è aperta (può essere anche una segreteria); "Conversazioni" = oltre 30 secondi.
+          <strong>"Senza esito"</strong> sono le chiamate a cui il setter non ha associato nessun esito, quindi invisibili nelle tabelle qui sopra.</div>
+        <div class="kpi-row" id="vdGhlKpi"></div>
+        <div id="vdGhl"><div class="table-scroll"><table id="vdGhlTable"></table></div></div>
       </div>
 
       <div class="card">
