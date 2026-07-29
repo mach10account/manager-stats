@@ -28,6 +28,7 @@
   /* serie grafici (palette validata: CVD ΔE 65 · contrasto ≥3:1) */
   --series-1: #2270d8;   /* metrica primaria (blu royal) */
   --series-2: #0f9f85;   /* metrica secondaria / appuntamento (teal) */
+  --series-3: #c9591b;   /* terza serie (rame) — validata: CVD ΔE 12 vs teal, contrasto ≥3:1 */
   --seq-300: #7fb0ec;
   --seq-450: #2270d8;
   --good-text: #0c7a52;
@@ -57,6 +58,7 @@
     /* palette dark validata su superficie #0f1d33 */
     --series-1: #3d8be8;
     --series-2: #14a88c;
+    --series-3: #d97430;   /* rame dark — banda L 0.48–0.67 rispettata */
     --seq-300: #2c5a9e;
     --seq-450: #3d8be8;
     --good-text: #2fbf8f;

@@ -10,12 +10,14 @@ import * as panoramica from './sections/panoramica.js';
 import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as chiamate from './sections/chiamate.js';
+import * as vendita from './sections/vendita.js';
 
 const sections = {
   '/panoramica': panoramica,
   '/marketing': marketing,
   '/coorti': coorti,
   '/chiamate': chiamate,
+  '/vendita': vendita,
 };
 
 const $ = id => document.getElementById(id);
