@@ -454,3 +454,6 @@ footer { color: var(--muted); font-size: 11px; text-align: center; margin: 26px 
 #acTable button.ac-save:hover:not(:disabled) { background: var(--row-hover); }
 #acTable button.ac-save:disabled { opacity: .5; cursor: default; }
 .ac-msg { font-size: 12px; margin-left: 8px; color: var(--muted); }
+
+/* Elenco lead nello speed to lead: "in attesa" e neutro, non un allarme */
+.lead-attesa { color: var(--muted); }

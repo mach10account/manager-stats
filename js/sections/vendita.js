@@ -16,6 +16,7 @@ let _renderId = 0;
 let setterSort = { key: 'chiamate', dir: -1 };
 let ghlSort = { key: 'chiamate', dir: -1 };
 let stlSort = { key: 'primi_contatti', dir: -1 };
+let soloSaltati = false;
 let setterFilter = '';
 
 // ── caricamento ──────────────────────────────────────────────────────────────
@@ -37,8 +38,9 @@ async function buildData(from, to) {
       .then(r => r.data || []).catch(() => []),
     // speed to lead — una riga per lead ENTRATO nel periodo (non per chiamata fatta)
     fetchAll((lo, hi) => supabase.from('v_set_speed_to_lead')
-      .select('minuti,setter,fascia,in_attesa,saltato')
-      .gte('giorno_entrata', from).lte('giorno_entrata', to).range(lo, hi)).catch(() => []),
+      .select('minuti,setter,fascia,in_attesa,saltato,lead,entrata_a')
+      .gte('giorno_entrata', from).lte('giorno_entrata', to)
+      .order('entrata_a', { ascending: false }).range(lo, hi)).catch(() => []),
   ]);
 
   // l'RPC ritorna una riga per setter + una riga con setter NULL = totale azienda
@@ -486,6 +488,30 @@ function renderStl() {
   renderTable(_mount.querySelector('#vdStlTable'), stlCols, stlBySetter(), stlSort,
     k => { stlSort = { key: k, dir: stlSort.key === k ? -stlSort.dir : -1 }; renderStl(); },
     { barKey: 'primi_contatti' });
+
+  renderElencoLead();
+}
+
+// elenco dei lead entrati: la prima domanda guardando il conteggio è "chi sono"
+const ORA = iso => !iso ? '—' : new Date(iso).toLocaleString('it-IT',
+  { timeZone: 'Europe/Rome', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+function renderElencoLead() {
+  const el = _mount.querySelector('#vdStlLead');
+  let righe = [...(DATA.stl || [])];
+  if (soloSaltati) righe = righe.filter(r => r.saltato);
+  if (!righe.length) {
+    el.innerHTML = '<div class="status">' + (soloSaltati ? 'Nessun lead saltato nel periodo.' : 'Nessun lead.') + '</div>';
+    return;
+  }
+  el.innerHTML = '<thead><tr><th>Lead</th><th>Entrato</th><th>Prima chiamata</th><th>Setter</th></tr></thead><tbody>' +
+    righe.map(r => {
+      const stato = r.saltato ? '<span class="val-bad">mai chiamato</span>'
+        : r.in_attesa ? '<span class="lead-attesa">in attesa</span>'
+        : durata(r.minuti);
+      return `<tr><td class="name">${esc(r.lead || '(senza nome)')}</td>
+        <td>${ORA(r.entrata_a)}</td><td>${stato}</td><td>${esc(r.setter || '—')}</td></tr>`;
+    }).join('') + '</tbody>';
 }
 
 // ── ciclo di rendering ───────────────────────────────────────────────────────
@@ -548,6 +574,12 @@ export async function render(mount) {
         <div id="vdStl">
           <div class="chart-wrap"><svg id="vdStlChart" width="100%" height="240"></svg></div>
           <div class="table-scroll" style="margin-top:14px"><table id="vdStlTable"></table></div>
+          <div class="filters" style="margin:18px 0 8px">
+            <span class="filter-cap">Elenco lead</span>
+            <button id="vdStlTutti" class="active">Tutti</button>
+            <button id="vdStlSaltati">Solo mai chiamati</button>
+          </div>
+          <div class="table-scroll"><table id="vdStlLead"></table></div>
         </div>
       </div>
 
@@ -616,6 +648,9 @@ export async function render(mount) {
     setterFilter = e.target.value.toLowerCase();
     if (DATA) renderSetterTable();
   };
+  const bT = mount.querySelector('#vdStlTutti'), bS = mount.querySelector('#vdStlSaltati');
+  bT.onclick = () => { soloSaltati = false; bT.classList.add('active'); bS.classList.remove('active'); if (DATA) renderElencoLead(); };
+  bS.onclick = () => { soloSaltati = true; bS.classList.add('active'); bT.classList.remove('active'); if (DATA) renderElencoLead(); };
 
   await load();
 }
