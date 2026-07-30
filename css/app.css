@@ -311,11 +311,15 @@ header::before { /* alone di luce in alto a sinistra */
   font-size: 12px; color: var(--text-secondary); background: rgba(232, 160, 29, 0.1);
   border: 1px solid rgba(232, 160, 29, 0.35); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px;
 }
-.breadcrumb { font-size: 13px; margin-bottom: 12px; color: var(--muted); }
-.breadcrumb a { color: var(--series-1); text-decoration: none; font-weight: 600; }
-.breadcrumb a:hover { text-decoration: underline; }
-.breadcrumb .bc-sep { margin: 0 6px; color: var(--baseline); }
-.breadcrumb .bc-cur { color: var(--text-primary); font-weight: 600; }
+.mk-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.mk-head h2 { margin-bottom: 0; }
+.btn-back {
+  padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: 999px;
+  transition: background .15s, color .15s;
+}
+.btn-back:hover { background: var(--row-hover); color: var(--text-primary); }
 .badge {
   display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 20px;
   background: rgba(232, 160, 29, 0.14); color: #9a6b00; border: 1px solid rgba(232, 160, 29, 0.4);
