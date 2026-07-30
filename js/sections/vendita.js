@@ -411,8 +411,9 @@ function renderFunnelFilter() {
     const el = _mount.querySelector('#vdFunnel');
     el.innerHTML = '<tbody><tr><td class="name">Caricamento…</td></tr></tbody>';
     const f = getFilters();
+    // NB: il builder di supabase-js ha solo .then — un .catch diretto è un TypeError
     const { data } = await supabase.rpc('api_set_funnel',
-      { p_from: f.from, p_to: f.to, p_setter: funnelSetter || null }).catch(() => ({ data: null }));
+      { p_from: f.from, p_to: f.to, p_setter: funnelSetter || null }).then(r => r).catch(() => ({ data: null }));
     if (myId !== _funnelReqId || !_mount.querySelector('#vdFunnel')) return;   // risposta obsoleta
     DATA.funnel = data || [];
     renderFunnel();
