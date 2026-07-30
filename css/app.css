@@ -482,3 +482,41 @@ footer { color: var(--muted); font-size: 11px; text-align: center; margin: 26px 
 .lead-nota:last-child { border-bottom: none; }
 .lead-nota-meta { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
 .lead-nota-testo { font-size: 13px; white-space: pre-wrap; }
+
+/* ------------------------------------------------ funnel (dettaglio centro) */
+
+:root {
+  --funnel-1: #9cc2f1;
+  --funnel-2: #6ba3e8;
+  --funnel-3: #3f86dd;
+  --funnel-4: #2270d8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --funnel-1: #2c5a9e;
+    --funnel-2: #3670bd;
+    --funnel-3: #3d8be8;
+    --funnel-4: #63a8f0;
+  }
+}
+
+.funnel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.funnel-spend { font-size: 12.5px; color: var(--text-secondary); }
+.funnel-spend b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+.funnel { display: flex; flex-direction: column; align-items: center; margin-top: 14px; }
+.f-label { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--text-secondary); margin-bottom: 4px; }
+.f-label .f-val { font-size: 15px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.f-label .f-share { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.f-bar { height: 24px; border-radius: 4px; min-width: 14px; }
+.f-bar-1 { background: var(--funnel-1); }
+.f-bar-2 { background: var(--funnel-2); }
+.f-bar-3 { background: var(--funnel-3); }
+.f-bar-4 { background: var(--funnel-4); }
+.f-step { font-size: 12px; color: var(--text-secondary); padding: 6px 0; font-variant-numeric: tabular-nums; }
+
+.funnel-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 18px; }
+.f-kpi { background: var(--row-alt); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.f-kpi-label { font-size: 11.5px; color: var(--muted); }
+.f-kpi-val { font-size: 18px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.f-kpi-sub { font-size: 11.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }

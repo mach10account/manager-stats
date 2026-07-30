@@ -64,6 +64,60 @@ function drawDetail(mount) {
     { barKey: 'lead' });
 }
 
+// Funnel del periodo: totali del centro (indipendenti dal tab attivo).
+// Larghezza barre proporzionale ai volumi; % di passaggio tra le fasi.
+function drawFunnel(mount) {
+  const card = mount.querySelector('#mkFunnelCard');
+  if (!card) return;
+
+  const tot = { lead: 0, app: 0, presenze: 0, vendite: 0, ricavo: 0, spend: null };
+  for (const r of _ctx.rows) {
+    tot.lead     += (+r.lead || 0);
+    tot.app      += (+r.lead_con_appuntamento || 0);
+    tot.presenze += (+r.presenze || 0);
+    tot.vendite  += (+r.vendite || 0);
+    tot.ricavo   += (+r.ricavo || 0);
+    if (r.spend !== null && r.spend !== undefined) tot.spend = (tot.spend || 0) + (+r.spend || 0);
+  }
+  if (!tot.lead) { card.hidden = true; return; }
+
+  const stages = [
+    { nome: 'Lead',          val: tot.lead },
+    { nome: 'Lead con app.', val: tot.app },
+    { nome: 'Presenze',      val: tot.presenze },
+    { nome: 'Vendite',       val: tot.vendite },
+  ];
+
+  let html = '';
+  stages.forEach((s, i) => {
+    if (i > 0) {
+      const conv = safeDiv(s.val, stages[i - 1].val);
+      html += `<div class="f-step">↓ ${conv === null ? '—' : pctFrac(conv)}</div>`;
+    }
+    const w = Math.max(s.val / tot.lead * 100, 2.5);
+    html += `
+      <div class="f-label"><span class="f-name">${s.nome}</span>
+        <span class="f-val">${fmt(s.val)}</span>
+        <span class="f-share">${pctFrac(safeDiv(s.val, tot.lead))}</span></div>
+      <div class="f-bar f-bar-${i + 1}" style="width:${w}%"></div>`;
+  });
+  card.querySelector('#mkFunnel').innerHTML = html;
+
+  const kpi = (label, val, sub) => `
+    <div class="f-kpi"><span class="f-kpi-label">${label}</span>
+      <span class="f-kpi-val">${val}</span>${sub ? `<span class="f-kpi-sub">${sub}</span>` : ''}</div>`;
+  card.querySelector('#mkFunnelKpis').innerHTML =
+    kpi('Conversione lead → vendita', pctFrac(safeDiv(tot.vendite, tot.lead))) +
+    kpi('Costo per presenza', tot.spend === null || !tot.presenze ? '—' : eur2(tot.spend / tot.presenze),
+        tot.spend === null ? 'senza spesa FB' : `${eur(tot.spend)} / ${fmt(tot.presenze)}`) +
+    kpi('Costo per vendita', tot.spend === null || !tot.vendite ? '—' : eur2(tot.spend / tot.vendite),
+        tot.spend === null ? '' : `${eur(tot.spend)} / ${fmt(tot.vendite)}`);
+
+  card.querySelector('#mkFunnelSpend').innerHTML =
+    `Spesa <b>${tot.spend === null ? '—' : eur(tot.spend)}</b> · Ricavo <b>${eur(tot.ricavo)}</b>`;
+  card.hidden = false;
+}
+
 export async function render(mount, params) {
   const centro = params.get('centro') || '';
   if (!centro) { navigate('/panoramica'); return; }   // la sezione esiste solo come drill-down
@@ -83,6 +137,15 @@ export async function render(mount, params) {
       <div class="subtitle">Attribuzione per-lead · costi FB a livello ad (— = senza spesa FB nel periodo) · nel periodo selezionato.</div>
       <div class="lead-tabs mk-tabs">${TABS.map(t => `<button data-tab="${t.key}">${t.label}</button>`).join('')}</div>
       <div class="table-scroll"><table id="mkTable"></table></div>
+    </div>
+    <div class="card" id="mkFunnelCard" hidden>
+      <div class="funnel-head">
+        <h2>Funnel del periodo</h2>
+        <span class="funnel-spend" id="mkFunnelSpend"></span>
+      </div>
+      <div class="subtitle">Dal lead alla vendita, sul totale del centro nel periodo selezionato.</div>
+      <div class="funnel" id="mkFunnel"></div>
+      <div class="funnel-kpis" id="mkFunnelKpis"></div>
     </div>
     <div id="mkStatus" class="status loading">Caricamento dati…</div>`;
   mount.querySelector('#mkBack').onclick = () => navigate('/panoramica');
@@ -111,6 +174,7 @@ export async function render(mount, params) {
     return;
   }
   drawDetail(mount);
+  drawFunnel(mount);
 }
 
 export function onResize() { /* nessun grafico */ }
