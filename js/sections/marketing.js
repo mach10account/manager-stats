@@ -83,7 +83,7 @@ function drawFunnel(mount) {
 
   const stages = [
     { nome: 'Lead',          val: tot.lead },
-    { nome: 'Lead con app.', val: tot.app },
+    { nome: 'Appuntamento fissato', val: tot.app },
     { nome: 'Presenze',      val: tot.presenze },
     { nome: 'Vendite',       val: tot.vendite },
   ];
