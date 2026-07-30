@@ -107,7 +107,7 @@ export async function render(mount, params) {
     <div class="kpi-groups" id="pnKpi"></div>
     <div class="card">
       <h2>Per centro</h2>
-      <div class="subtitle">Nel periodo selezionato · KPI ricalcolati sui totali. Clicca una riga per il drill-down marketing.</div>
+      <div class="subtitle">Nel periodo selezionato · KPI ricalcolati sui totali. Clicca una riga per il dettaglio Campagne / Adset / Ad.</div>
       <input type="search" id="pnSearch" placeholder="Cerca centro…" value="${esc(search)}">
       <div class="table-scroll"><table id="pnTable"></table></div>
     </div>

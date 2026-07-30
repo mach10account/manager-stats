@@ -25,7 +25,7 @@ const sections = {
 // path → permesso richiesto (stessa chiave di data-sezione in index.html)
 const permessoDi = {
   '/panoramica': 'panoramica',
-  '/marketing': 'marketing',
+  '/marketing': 'panoramica',   // il drill-down centro è parte della Panoramica (voce nav rimossa)
   '/coorti': 'coorti',
   '/beauty': 'beauty',
   '/vendita': 'vendita',
@@ -128,7 +128,7 @@ function renderCurrent() {
 
   currentPath = path;
   if (path !== lastTrackedPath) { lastTrackedPath = path; track('PAGINA', path); }
-  highlightNav(path);
+  highlightNav(path === '/marketing' ? '/panoramica' : path);   // il drill-down evidenzia Panoramica
   // in Vendita il filtro Consulente non ha senso (i setter lavorano l'acquisizione, non i centri)
   const consulenteRow = $('consulenteRow');
   if (consulenteRow) consulenteRow.classList.toggle('hidden', path === '/vendita');

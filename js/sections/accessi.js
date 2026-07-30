@@ -9,7 +9,6 @@ import { esc } from '../format.js';
 
 const SEZIONI = [
   { key: 'panoramica', label: 'Panoramica' },
-  { key: 'marketing',  label: 'Marketing' },
   { key: 'coorti',     label: 'Coorti' },
   { key: 'beauty',     label: 'Beauty' },
   { key: 'vendita',    label: 'Vendita' },

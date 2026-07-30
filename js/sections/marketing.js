@@ -1,4 +1,4 @@
-// manager-stats · Sezione Marketing — lista aziende → dettaglio con tab Campagne / Adset / Ad
+// manager-stats · Dettaglio centro (da click in Panoramica) — tab Campagne / Adset / Ad
 import { supabase } from '../supabase.js';
 import { fetchAll, loadCentri, centriMap } from '../data.js';
 import { getFilters } from '../filters.js';
@@ -7,7 +7,6 @@ import { renderTable } from '../tables.js';
 import { fmt, eur, eur2, ratio, pctFrac, safeDiv, esc } from '../format.js';
 
 let sort = { key: 'lead', dir: -1 };
-let search = '';
 let _ctx = null;   // { rows, centro, tab } per re-sort / cambio tab senza refetch
 
 const TABS = [
@@ -32,14 +31,14 @@ function makeCols(firstLabel) {
   ];
 }
 
-function groupBy(rows, idKey, nameOf) {
+function groupBy(rows, idKey, nameKey) {
   const m = new Map();
   const SUM = ['lead', 'lead_con_appuntamento', 'presenze', 'vendite', 'ricavo', 'potenziale'];
   for (const r of rows) {
     const id = r[idKey] || '__none__';
     let a = m.get(id);
     if (!a) {
-      a = { _id: r[idKey] || null, nome: nameOf(r), spend: null };
+      a = { _id: r[idKey] || null, nome: r[nameKey] || '(senza nome)', spend: null };
       for (const k of SUM) a[k] = 0;
       m.set(id, a);
     }
@@ -55,92 +54,51 @@ function groupBy(rows, idKey, nameOf) {
   });
 }
 
-// vista lista: una riga per azienda, click → dettaglio
-function drawList(mount) {
-  const map = centriMap();
-  let rows = groupBy(_ctx.rows, 'centro_id', r => {
-    const c = map.get(r.centro_id);
-    return c ? c.nome : '(senza centro)';
-  });
-  if (search) rows = rows.filter(r => r.nome.toLowerCase().includes(search));
-
-  renderTable(mount.querySelector('#mkTable'), makeCols('Azienda'), rows, sort,
-    k => { sort = { key: k, dir: sort.key === k ? -sort.dir : -1 }; drawList(mount); },
-    {
-      barKey: 'lead',
-      rowLink: r => !!r._id,
-      onRowClick: r => { if (r._id) navigate('/marketing', { centro: r._id }); },
-    });
-}
-
-// vista dettaglio azienda: tabella piatta del tab attivo
 function drawDetail(mount) {
   const t = TABS.find(x => x.key === _ctx.tab) || TABS[0];
   mount.querySelectorAll('.mk-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === t.key));
 
-  const rows = groupBy(_ctx.rows, t.idKey, r => r[t.nameKey] || '(senza nome)');
+  const rows = groupBy(_ctx.rows, t.idKey, t.nameKey);
   renderTable(mount.querySelector('#mkTable'), makeCols(t.col), rows, sort,
     k => { sort = { key: k, dir: sort.key === k ? -sort.dir : -1 }; drawDetail(mount); },
     { barKey: 'lead' });
 }
 
 export async function render(mount, params) {
-  const f = getFilters();
   const centro = params.get('centro') || '';
+  if (!centro) { navigate('/panoramica'); return; }   // la sezione esiste solo come drill-down
+
+  const f = getFilters();
   const tabParam = params.get('tab') || 'campaign';
 
-  try { await loadCentri(); } catch (e) { /* auth error surfaced sotto */ }
   let centroLabel = '';
-  if (centro) { const c = centriMap().get(centro); if (c) centroLabel = c.nome; }
+  try { await loadCentri(); const c = centriMap().get(centro); if (c) centroLabel = c.nome; } catch (e) { /* auth error surfaced sotto */ }
 
-  if (centro) {
-    mount.innerHTML = `
-      <div class="card">
-        <div class="mk-head">
-          <button id="mkBack" class="btn-back">← Indietro</button>
-          <h2>${esc(centroLabel || '(senza nome)')}</h2>
-        </div>
-        <div class="subtitle">Attribuzione per-lead · costi FB a livello ad (— = senza spesa FB nel periodo) · nel periodo selezionato.</div>
-        <div class="lead-tabs mk-tabs">${TABS.map(t => `<button data-tab="${t.key}">${t.label}</button>`).join('')}</div>
-        <div class="table-scroll"><table id="mkTable"></table></div>
+  mount.innerHTML = `
+    <div class="card">
+      <div class="mk-head">
+        <button id="mkBack" class="btn-back">← Indietro</button>
+        <h2>${esc(centroLabel || '(senza nome)')}</h2>
       </div>
-      <div id="mkStatus" class="status loading">Caricamento dati…</div>`;
-    mount.querySelector('#mkBack').onclick = () => navigate('/marketing');
-    mount.querySelectorAll('.mk-tabs button').forEach(b => b.onclick = () => {
-      if (!_ctx || _ctx.centro !== centro) return;   // dati non ancora caricati
-      _ctx.tab = b.dataset.tab;
-      history.replaceState(null, '', '#/marketing?' + new URLSearchParams({ centro, tab: _ctx.tab }));
-      drawDetail(mount);
-    });
-  } else {
-    mount.innerHTML = `
-      <div class="card">
-        <h2>Marketing</h2>
-        <div class="subtitle">Tutte le aziende nel periodo selezionato · clicca un'azienda per il dettaglio Campagne / Adset / Ad.</div>
-        <input type="search" id="mkSearch" placeholder="Cerca azienda…" value="${esc(search)}">
-        <div class="table-scroll"><table id="mkTable"></table></div>
-      </div>
-      <div id="mkStatus" class="status loading">Caricamento dati…</div>`;
-    mount.querySelector('#mkSearch').oninput = e => {
-      search = e.target.value.toLowerCase();
-      if (_ctx && !_ctx.centro) drawList(mount);
-    };
-  }
-
-  const rowsRaw = await fetchAll((lo, hi) => {
-    let q = supabase.from('v_drilldown_ad')
-      .select('centro_id,giorno,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,lead,lead_con_appuntamento,appuntamenti,presenze,vendite,ricavo,potenziale,spend')
-      .gte('giorno', f.from).lte('giorno', f.to);
-    if (centro) q = q.eq('centro_id', centro);
-    return q.range(lo, hi);
+      <div class="subtitle">Attribuzione per-lead · costi FB a livello ad (— = senza spesa FB nel periodo) · nel periodo selezionato.</div>
+      <div class="lead-tabs mk-tabs">${TABS.map(t => `<button data-tab="${t.key}">${t.label}</button>`).join('')}</div>
+      <div class="table-scroll"><table id="mkTable"></table></div>
+    </div>
+    <div id="mkStatus" class="status loading">Caricamento dati…</div>`;
+  mount.querySelector('#mkBack').onclick = () => navigate('/panoramica');
+  mount.querySelectorAll('.mk-tabs button').forEach(b => b.onclick = () => {
+    if (!_ctx || _ctx.centro !== centro) return;   // dati non ancora caricati
+    _ctx.tab = b.dataset.tab;
+    history.replaceState(null, '', '#/marketing?' + new URLSearchParams({ centro, tab: _ctx.tab }));
+    drawDetail(mount);
   });
 
-  // filtro consulente sulla lista aziende (v_drilldown_ad non ha consulente → via mappa centri)
-  let rows = rowsRaw;
-  if (!centro && f.consulente) {
-    const map = centriMap();
-    rows = rows.filter(r => { const c = map.get(r.centro_id); return c && c.consulente === f.consulente; });
-  }
+  const rows = await fetchAll((lo, hi) =>
+    supabase.from('v_drilldown_ad')
+      .select('centro_id,giorno,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,lead,lead_con_appuntamento,appuntamenti,presenze,vendite,ricavo,potenziale,spend')
+      .gte('giorno', f.from).lte('giorno', f.to)
+      .eq('centro_id', centro)
+      .range(lo, hi));
 
   _ctx = { rows, centro, tab: TABS.some(t => t.key === tabParam) ? tabParam : 'campaign' };
 
@@ -148,11 +106,11 @@ export async function render(mount, params) {
   if (!st) return;   // render obsoleto: l'utente ha cambiato sezione durante il caricamento
   st.remove();
   if (!rows.length) {
-    if (centro) mount.querySelectorAll('.mk-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === _ctx.tab));
+    mount.querySelectorAll('.mk-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === _ctx.tab));
     mount.querySelector('#mkTable').innerHTML = '<tbody><tr><td class="name">Nessun dato nel periodo selezionato.</td></tr></tbody>';
     return;
   }
-  if (centro) drawDetail(mount); else drawList(mount);
+  drawDetail(mount);
 }
 
 export function onResize() { /* nessun grafico */ }
