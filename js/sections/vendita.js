@@ -437,7 +437,8 @@ function renderFunnel() {
   const f = (r, v) => isEuro(r) ? eur(v) : fmt(v);
   let h = `<thead><tr><th></th><th>Nuovi lead</th><th>Vecchi lead</th><th>Totale</th></tr></thead><tbody>`;
   for (const r of lista) {
-    const sep = r.ordine === 7 ? ' class="fn-sep"' : '';   // stacco tra attività chiamate e funnel appuntamenti
+    // stacchi: chiamate | esiti lead (stage GHL) | funnel appuntamenti | valori €
+    const sep = (r.ordine === 2 || r.ordine === 5 || r.ordine === 10) ? ' class="fn-sep"' : '';
     h += `<tr${sep}><td class="name">${esc(r.metrica)}</td>
       <td>${f(r, r.NUOVI)}</td><td>${f(r, r.VECCHI)}</td><td><b>${f(r, r.NUOVI + r.VECCHI)}</b></td></tr>`;
   }
@@ -586,8 +587,10 @@ export async function render(mount) {
       <div class="card">
         <h2>Report attività — nuovi vs vecchi lead</h2>
         <div class="subtitle"><strong>Nuovo</strong> = contatto la cui prima chiamata di sempre cade nel periodo selezionato; tutto il resto è vecchio.
-          Le righe chiamate contano gli esiti del setter scelto; le righe appuntamenti/chiusure vengono dalla pipeline GHL,
-          attribuite al setter tramite i <strong>follower</strong> dell'opportunità (se l'opportunità non ha follower: chi ne ha fissato l'appuntamento).
+          Gli esiti vengono dagli <strong>stage della pipeline GHL</strong>, classificati e divisi come il foglio KPI CAMPAGNE
+          (Show = attesa risposta, trattativa, contratto inviato, chiusi, fissato 2°/3°, vendita non chiusa; Chiusure = solo contratto firmato),
+          e contano le opportunità entrate nello stage nel periodo, attribuite al setter tramite i <strong>follower</strong> dell'opportunità
+          (se l'opportunità non ha follower: chi ne ha fissato l'appuntamento).
           "Da svolgere" = entrata in uno stage fissato nel periodo e ancora lì.</div>
         <div class="filters" style="margin-bottom:10px">
           <span class="filter-cap">Setter</span>
