@@ -4,6 +4,7 @@
 // Tutti i ratio sono ricalcolati dai TOTALI del periodo, mai come media di ratio
 // per-riga — stessa regola di Panoramica e Chiamate.
 import { supabase } from '../supabase.js';
+import { NOTE_PROXY_URL } from '../config.js';
 import { fetchAll } from '../data.js';
 import { getFilters } from '../filters.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
@@ -497,11 +498,15 @@ function renderStl() {
 const ORA = iso => !iso ? '—' : new Date(iso).toLocaleString('it-IT',
   { timeZone: 'Europe/Rome', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
-// dettaglio chiamate di un lead: caricato al primo click, poi in cache per la sessione.
-// Stessi confini temporali del conteggio n_chiamate (dalla creazione dell'opportunità
-// alla nascita dell'opportunità successiva dello stesso contatto).
+// dettaglio di un lead (tab Chiamate / Note): caricato al primo click, poi in cache.
+// Le chiamate usano gli stessi confini temporali del conteggio n_chiamate (dalla creazione
+// dell'opportunità alla nascita dell'opportunità successiva dello stesso contatto);
+// le note arrivano da GHL via proxy n8n (autenticato col login Supabase).
 const _leadDet = new Map();     // leadKey → righe chiamate, oppure 'err'
+const _leadNote = new Map();    // leadKey → note GHL, oppure 'err'
+const _leadTab = new Map();     // leadKey → 'chiamate' | 'note'
 const _leadOpen = new Set();    // leadKey espansi
+let _utentiGhl = null;          // user_id GHL → nome (per firmare le note)
 const leadKey = r => r.ghl_contact_id + '|' + r.entrata_a;
 
 const STATO_CALL = {
@@ -525,7 +530,31 @@ async function fetchLeadDet(r) {
   _leadDet.set(k, error ? 'err' : (data || []));
 }
 
-function detHtml(r) {
+async function fetchUtenti() {
+  if (_utentiGhl) return;
+  const { data } = await supabase.from('set_utenti_ghl').select('user_id,nome')
+    .then(r => r).catch(() => ({ data: null }));
+  _utentiGhl = new Map((data || []).map(u => [u.user_id, u.nome]));
+}
+
+async function fetchLeadNote(r) {
+  const k = leadKey(r);
+  if (_leadNote.has(k)) return;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    // text/plain = niente preflight CORS; il jwt viaggia nel body, mai nell'URL
+    const res = await fetch(NOTE_PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ jwt: session ? session.access_token : '', contact: r.ghl_contact_id }),
+    });
+    const j = await res.json();
+    await fetchUtenti();
+    _leadNote.set(k, j.ok ? (j.note || []) : 'err');
+  } catch (e) { _leadNote.set(k, 'err'); }
+}
+
+function chiamateHtml(r) {
   const det = _leadDet.get(leadKey(r));
   if (det === undefined) return '<div class="status">Carico le chiamate…</div>';
   if (det === 'err') return '<div class="status">Errore nel caricare le chiamate.</div>';
@@ -535,6 +564,26 @@ function detHtml(r) {
       const tec = (STATO_CALL[c.stato] || c.stato || '—') + (c.durata_s ? ' · ' + durataCall(c.durata_s) : '');
       return `<tr><td>${ORA(c.quando)}</td><td>${esc(c.setter || '—')}</td><td>${esc(tec)}</td><td>${esc(c.esito || '—')}</td></tr>`;
     }).join('') + '</tbody></table>';
+}
+
+function noteHtml(r) {
+  const det = _leadNote.get(leadKey(r));
+  if (det === undefined) return '<div class="status">Carico le note…</div>';
+  if (det === 'err') return '<div class="status">Errore nel caricare le note.</div>';
+  if (!det.length) return '<div class="status">Nessuna nota su questo lead in GHL.</div>';
+  return '<div class="lead-note-list">' + det.map(n => {
+    const autore = (_utentiGhl && _utentiGhl.get(n.user_id)) || '—';
+    return `<div class="lead-nota"><div class="lead-nota-meta">${ORA(n.quando)} · ${esc(autore)}</div>` +
+      `<div class="lead-nota-testo">${esc(n.testo)}</div></div>`;
+  }).join('') + '</div>';
+}
+
+function detHtml(r) {
+  const tab = _leadTab.get(leadKey(r)) || 'chiamate';
+  return `<div class="lead-tabs">
+      <button data-tab="chiamate" class="${tab === 'chiamate' ? 'active' : ''}">Chiamate</button>
+      <button data-tab="note" class="${tab === 'note' ? 'active' : ''}">Note</button>
+    </div>` + (tab === 'note' ? noteHtml(r) : chiamateHtml(r));
 }
 
 function renderElencoLead() {
@@ -552,12 +601,11 @@ function renderElencoLead() {
         : durata(r.minuti);
       const n = +r.n_chiamate || 0;
       const open = _leadOpen.has(leadKey(r));
-      const click = n > 0 ? ` class="lead-click" data-i="${i}"` : '';
-      let h = `<tr${click}><td class="name">${esc(r.lead || '(senza nome)')}</td>
+      let h = `<tr class="lead-click" data-i="${i}"><td class="name">${esc(r.lead || '(senza nome)')}</td>
         <td>${ORA(r.entrata_a)}</td><td>${stato}</td>
-        <td>${n ? `<b>${n}</b> <span class="lead-caret">${open ? '▾' : '▸'}</span>` : '0'}</td>
+        <td>${n ? `<b>${n}</b>` : '0'} <span class="lead-caret">${open ? '▾' : '▸'}</span></td>
         <td>${esc(r.setter || '—')}</td></tr>`;
-      if (open) h += `<tr class="lead-det"><td colspan="5">${detHtml(r)}</td></tr>`;
+      if (open) h += `<tr class="lead-det" data-i="${i}"><td colspan="5">${detHtml(r)}</td></tr>`;
       return h;
     }).join('') + '</tbody>';
   el.querySelectorAll('tr.lead-click').forEach(tr => {
@@ -567,7 +615,19 @@ function renderElencoLead() {
       if (_leadOpen.has(k)) { _leadOpen.delete(k); renderElencoLead(); return; }
       _leadOpen.add(k);
       renderElencoLead();                                   // mostra subito "Carico…"
-      if (!_leadDet.has(k)) { await fetchLeadDet(r); renderElencoLead(); }
+      const tab = _leadTab.get(k) || 'chiamate';
+      if (tab === 'note' && !_leadNote.has(k)) { await fetchLeadNote(r); renderElencoLead(); }
+      else if (tab === 'chiamate' && !_leadDet.has(k)) { await fetchLeadDet(r); renderElencoLead(); }
+    };
+  });
+  el.querySelectorAll('tr.lead-det button[data-tab]').forEach(b => {
+    b.onclick = async () => {
+      const r = righe[+b.closest('tr').dataset.i];
+      const k = leadKey(r), t = b.dataset.tab;
+      _leadTab.set(k, t);
+      renderElencoLead();
+      if (t === 'note' && !_leadNote.has(k)) { await fetchLeadNote(r); renderElencoLead(); }
+      else if (t === 'chiamate' && !_leadDet.has(k)) { await fetchLeadDet(r); renderElencoLead(); }
     };
   });
 }
@@ -628,7 +688,7 @@ export async function render(mount) {
         <div class="subtitle">Quanto passa fra l'ingresso del lead in pipeline e il <strong>primo squillo</strong>.
           Una riga per lead <em>entrato</em> nel periodo (non per chiamata fatta), quindi il filtro periodo qui seleziona la data di ingresso.
           "Mai chiamati" conta solo chi è entrato da oltre 24 ore: chi è arrivato stamattina sta in "In attesa".
-          Nell'elenco, <strong>Chiamate</strong> = squilli composti dal log nativo GHL: clicca il lead per vedere quando è stato chiamato, da chi e con che esito.</div>
+          Nell'elenco, <strong>Chiamate</strong> = squilli composti dal log nativo GHL: clicca il lead per vedere le chiamate (quando, da chi, con che esito) e le <strong>note</strong> scritte su di lui in GHL.</div>
         <div class="kpi-row" id="vdStlKpi"></div>
         <div id="vdStl">
           <div class="chart-wrap"><svg id="vdStlChart" width="100%" height="240"></svg></div>

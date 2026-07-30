@@ -458,11 +458,23 @@ footer { color: var(--muted); font-size: 11px; text-align: center; margin: 26px 
 /* Elenco lead nello speed to lead: "in attesa" e neutro, non un allarme */
 .lead-attesa { color: var(--muted); }
 
-/* Elenco lead: riga cliccabile → dettaglio chiamate del lead */
+/* Elenco lead: riga cliccabile → dettaglio del lead (tab Chiamate / Note) */
 #vdStlLead tr.lead-click { cursor: pointer; }
 .lead-caret { color: var(--muted); font-size: 11px; }
 #vdStlLead tr.lead-det:hover { background: none; }
 #vdStlLead tr.lead-det > td { padding: 0 12px 14px 24px; }
 .lead-det-tab { width: 100%; font-size: 13px; }
 .lead-det-tab th { color: var(--muted); font-weight: 600; }
-.lead-det-tab .status { padding: 12px; }
+.lead-det-tab .status, .lead-note-list + .status { padding: 12px; }
+.lead-tabs { display: flex; gap: 6px; margin: 10px 0 6px; }
+.lead-tabs button {
+  font: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; cursor: pointer;
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid transparent; border-radius: 999px;
+}
+.lead-tabs button:hover { background: var(--row-hover); color: var(--text-primary); }
+.lead-tabs button.active { color: #fff; background: var(--brand-grad); }
+.lead-nota { padding: 7px 0; border-bottom: 1px solid var(--row-hover); }
+.lead-nota:last-child { border-bottom: none; }
+.lead-nota-meta { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+.lead-nota-testo { font-size: 13px; white-space: pre-wrap; }
