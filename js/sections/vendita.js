@@ -732,7 +732,7 @@ export async function render(mount) {
       <div class="card">
         <h2>Per setter</h2>
         <div class="subtitle">Nel periodo selezionato. "Contatti" = titolari UNICI lavorati (3 chiamate allo stesso titolare = 1 contatto).
-          "Appuntamenti" esclude le conferme, che riguardano appuntamenti già presi. Il filtro Consulente non si applica: i setter lavorano l'acquisizione, non i centri clienti.</div>
+          "Appuntamenti" esclude le conferme, che riguardano appuntamenti già presi.</div>
         <input type="search" id="vdSearch" placeholder="Cerca setter…" value="${esc(setterFilter)}">
         <div class="table-scroll"><table id="vdSetter"></table></div>
       </div>

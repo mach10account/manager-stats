@@ -129,6 +129,9 @@ function renderCurrent() {
   currentPath = path;
   if (path !== lastTrackedPath) { lastTrackedPath = path; track('PAGINA', path); }
   highlightNav(path);
+  // in Vendita il filtro Consulente non ha senso (i setter lavorano l'acquisizione, non i centri)
+  const consulenteRow = $('consulenteRow');
+  if (consulenteRow) consulenteRow.classList.toggle('hidden', path === '/vendita');
   mount.innerHTML = '<div class="status loading">Caricamento…</div>';
   Promise.resolve()
     .then(() => sections[path].render(mount, route.params))
