@@ -38,7 +38,7 @@ async function buildData(from, to) {
       .then(r => r.data || []).catch(() => []),
     // speed to lead — una riga per lead ENTRATO nel periodo (non per chiamata fatta)
     fetchAll((lo, hi) => supabase.from('v_set_speed_to_lead')
-      .select('minuti,setter,fascia,in_attesa,saltato,lead,entrata_a')
+      .select('minuti,setter,fascia,in_attesa,saltato,lead,entrata_a,ghl_contact_id,n_chiamate,fine_finestra')
       .gte('giorno_entrata', from).lte('giorno_entrata', to)
       .order('entrata_a', { ascending: false }).range(lo, hi)).catch(() => []),
   ]);
@@ -497,6 +497,46 @@ function renderStl() {
 const ORA = iso => !iso ? '—' : new Date(iso).toLocaleString('it-IT',
   { timeZone: 'Europe/Rome', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+// dettaglio chiamate di un lead: caricato al primo click, poi in cache per la sessione.
+// Stessi confini temporali del conteggio n_chiamate (dalla creazione dell'opportunità
+// alla nascita dell'opportunità successiva dello stesso contatto).
+const _leadDet = new Map();     // leadKey → righe chiamate, oppure 'err'
+const _leadOpen = new Set();    // leadKey espansi
+const leadKey = r => r.ghl_contact_id + '|' + r.entrata_a;
+
+const STATO_CALL = {
+  completed: 'risposta', 'no-answer': 'non risposta', busy: 'occupato',
+  failed: 'non partita', ringing: 'non partita', voicemail: 'segreteria',
+  'in-progress': 'in corso', initiated: 'avviata',
+};
+const durataCall = s => !s ? '' : (s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60 ? s % 60 + 's' : ''));
+
+async function fetchLeadDet(r) {
+  const k = leadKey(r);
+  if (_leadDet.has(k)) return;
+  let q = supabase.from('v_set_chiamate_ghl')
+    .select('quando,setter,stato,durata_s,esito')
+    .eq('ghl_contact_id', r.ghl_contact_id)
+    .gte('quando', r.entrata_a)
+    .order('quando', { ascending: true })
+    .limit(200);
+  if (r.fine_finestra) q = q.lt('quando', r.fine_finestra);
+  const { data, error } = await q;
+  _leadDet.set(k, error ? 'err' : (data || []));
+}
+
+function detHtml(r) {
+  const det = _leadDet.get(leadKey(r));
+  if (det === undefined) return '<div class="status">Carico le chiamate…</div>';
+  if (det === 'err') return '<div class="status">Errore nel caricare le chiamate.</div>';
+  if (!det.length) return '<div class="status">Nessuna chiamata registrata da GHL per questo lead.</div>';
+  return '<table class="lead-det-tab"><thead><tr><th>Quando</th><th>Setter</th><th>Telefonata</th><th>Esito dichiarato</th></tr></thead><tbody>' +
+    det.map(c => {
+      const tec = (STATO_CALL[c.stato] || c.stato || '—') + (c.durata_s ? ' · ' + durataCall(c.durata_s) : '');
+      return `<tr><td>${ORA(c.quando)}</td><td>${esc(c.setter || '—')}</td><td>${esc(tec)}</td><td>${esc(c.esito || '—')}</td></tr>`;
+    }).join('') + '</tbody></table>';
+}
+
 function renderElencoLead() {
   const el = _mount.querySelector('#vdStlLead');
   let righe = [...(DATA.stl || [])];
@@ -505,14 +545,31 @@ function renderElencoLead() {
     el.innerHTML = '<div class="status">' + (soloSaltati ? 'Nessun lead saltato nel periodo.' : 'Nessun lead.') + '</div>';
     return;
   }
-  el.innerHTML = '<thead><tr><th>Lead</th><th>Entrato</th><th>Prima chiamata</th><th>Setter</th></tr></thead><tbody>' +
-    righe.map(r => {
+  el.innerHTML = '<thead><tr><th>Lead</th><th>Entrato</th><th>Prima chiamata</th><th>Chiamate</th><th>Setter</th></tr></thead><tbody>' +
+    righe.map((r, i) => {
       const stato = r.saltato ? '<span class="val-bad">mai chiamato</span>'
         : r.in_attesa ? '<span class="lead-attesa">in attesa</span>'
         : durata(r.minuti);
-      return `<tr><td class="name">${esc(r.lead || '(senza nome)')}</td>
-        <td>${ORA(r.entrata_a)}</td><td>${stato}</td><td>${esc(r.setter || '—')}</td></tr>`;
+      const n = +r.n_chiamate || 0;
+      const open = _leadOpen.has(leadKey(r));
+      const click = n > 0 ? ` class="lead-click" data-i="${i}"` : '';
+      let h = `<tr${click}><td class="name">${esc(r.lead || '(senza nome)')}</td>
+        <td>${ORA(r.entrata_a)}</td><td>${stato}</td>
+        <td>${n ? `<b>${n}</b> <span class="lead-caret">${open ? '▾' : '▸'}</span>` : '0'}</td>
+        <td>${esc(r.setter || '—')}</td></tr>`;
+      if (open) h += `<tr class="lead-det"><td colspan="5">${detHtml(r)}</td></tr>`;
+      return h;
     }).join('') + '</tbody>';
+  el.querySelectorAll('tr.lead-click').forEach(tr => {
+    tr.onclick = async () => {
+      const r = righe[+tr.dataset.i];
+      const k = leadKey(r);
+      if (_leadOpen.has(k)) { _leadOpen.delete(k); renderElencoLead(); return; }
+      _leadOpen.add(k);
+      renderElencoLead();                                   // mostra subito "Carico…"
+      if (!_leadDet.has(k)) { await fetchLeadDet(r); renderElencoLead(); }
+    };
+  });
 }
 
 // ── ciclo di rendering ───────────────────────────────────────────────────────
@@ -570,7 +627,8 @@ export async function render(mount) {
         <h2>Speed to lead</h2>
         <div class="subtitle">Quanto passa fra l'ingresso del lead in pipeline e il <strong>primo squillo</strong>.
           Una riga per lead <em>entrato</em> nel periodo (non per chiamata fatta), quindi il filtro periodo qui seleziona la data di ingresso.
-          "Mai chiamati" conta solo chi è entrato da oltre 24 ore: chi è arrivato stamattina sta in "In attesa".</div>
+          "Mai chiamati" conta solo chi è entrato da oltre 24 ore: chi è arrivato stamattina sta in "In attesa".
+          Nell'elenco, <strong>Chiamate</strong> = squilli composti dal log nativo GHL: clicca il lead per vedere quando è stato chiamato, da chi e con che esito.</div>
         <div class="kpi-row" id="vdStlKpi"></div>
         <div id="vdStl">
           <div class="chart-wrap"><svg id="vdStlChart" width="100%" height="240"></svg></div>
