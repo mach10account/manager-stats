@@ -3,7 +3,7 @@
 // Chi vede cosa lo decide il database (ms_team: stesso team = almeno un centro in
 // comune; admin vede tutti). Qui si disegna soltanto: due viste sugli STESSI dati
 // (nessuna query in più) — Lista con le tab Arretrate / Oggi / Prossime /
-// Completate, e Settimana con la griglia oraria — più il pannello di dettaglio.
+// Completate, e Calendario con la griglia oraria settimanale — più il dettaglio.
 // La barra Periodo in alto è nascosta da app.js: una task arretrata deve restare
 // visibile qualunque intervallo di date sia selezionato.
 import { supabase } from '../supabase.js';
@@ -470,13 +470,13 @@ export async function render(mount) {
       </div>
       <div class="subtitle">Le task tue e delle persone con cui condividi i centri.
         Chiunque può assegnarne una a chiunque del team; stato ed esito li può aggiornare chi la vede.
-        In <strong>Settimana</strong> clicca un'ora vuota per assegnare una task in quel momento.</div>
+        Nel <strong>Calendario</strong> clicca un'ora vuota per assegnare una task in quel momento.</div>
       <div class="tk-barra">
         <div class="lead-tabs tk-tabs">${TABS.map(([k, l]) =>
           `<button data-tab="${k}">${l} <span class="tk-count">0</span></button>`).join('')}</div>
         <div class="lead-tabs tk-vista">
           <button data-vista="lista">Lista</button>
-          <button data-vista="settimana">Settimana</button>
+          <button data-vista="settimana">Calendario</button>
         </div>
         <label class="consulente-wrap tk-chi">Persona
           <select id="tkChi"><option value="tutti">Tutto il team</option></select></label>
