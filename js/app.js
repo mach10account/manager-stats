@@ -1,7 +1,7 @@
 // manager-stats · bootstrap: auth, router, filtri, montaggio sezioni
 import { signIn, signOut, onAuthStateChange, requireSession, isAuthError, supabase } from './supabase.js';
 import { setTrackUser, track } from './track.js';
-import { initFilters } from './filters.js';
+import { initFilters, filtroConsulenteUtile } from './filters.js';
 import { startRouter, parseHash, navigate } from './router.js';
 import { initModal } from './modal.js';
 import { loadFreshness, clearCentriCache } from './data.js';
@@ -129,9 +129,11 @@ function renderCurrent() {
   currentPath = path;
   if (path !== lastTrackedPath) { lastTrackedPath = path; track('PAGINA', path); }
   highlightNav(path === '/marketing' ? '/panoramica' : path);   // il drill-down evidenzia Panoramica
-  // in Vendita il filtro Consulente non ha senso (i setter lavorano l'acquisizione, non i centri)
+  // in Vendita il filtro Consulente non ha senso (i setter lavorano l'acquisizione,
+  // non i centri); per chi vede un solo consulente e' una tendina a una voce
   const consulenteRow = $('consulenteRow');
-  if (consulenteRow) consulenteRow.classList.toggle('hidden', path === '/vendita');
+  if (consulenteRow) consulenteRow.classList.toggle('hidden',
+    path === '/vendita' || !filtroConsulenteUtile());
   mount.innerHTML = '<div class="status loading">Caricamento…</div>';
   Promise.resolve()
     .then(() => sections[path].render(mount, route.params))

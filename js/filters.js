@@ -5,7 +5,13 @@ import { loadCentri } from './data.js';
 
 const state = { from: null, to: null, consulente: '' };
 
+// Il filtro Consulente serve solo a chi vede piu' di un consulente: per un
+// consulente limitato ai propri centri (migration 27) la tendina avrebbe una
+// voce sola. Deciso in initFilters sui centri effettivamente leggibili.
+let utile = true;
+
 export function getFilters() { return { ...state }; }
+export function filtroConsulenteUtile() { return utile; }
 
 function dispatch() {
   document.dispatchEvent(new CustomEvent('filterchange', { detail: getFilters() }));
@@ -67,7 +73,8 @@ export async function initFilters() {
     dispatch();
   };
 
-  // select consulente (popolata dall'anagrafica centri)
+  // select consulente (popolata dall'anagrafica centri, gia' filtrata dalla RLS:
+  // chi e' limitato a un solo consulente vedrebbe una tendina con una voce sola)
   const sel = document.getElementById('consulenteSelect');
   if (sel) {
     sel.onchange = () => { state.consulente = sel.value; dispatch(); };
@@ -77,6 +84,7 @@ export async function initFilters() {
         .sort((a, b) => a.localeCompare(b));
       sel.innerHTML = '<option value="">Tutti i consulenti</option>' +
         names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+      utile = names.length > 1;
     } catch (e) {
       sel.innerHTML = '<option value="">Tutti i consulenti</option>';
     }
