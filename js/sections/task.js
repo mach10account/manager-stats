@@ -21,7 +21,9 @@ let PERSONE = [];     // { user_id, nome, email } — le persone del mio team
 let CENTRI = [];      // anagrafica (già filtrata dallo scope dell'utente)
 let ME = null;        // { id, nome }
 let tab = 'oggi';
-let chi = 'tutti';    // 'tutti' | user_id
+let GENTE = [];       // [{ id, nome }] — le persone che compaiono nel pannello "Calendari"
+let selezione = null; // Set di user_id spuntati (null finché non si carica)
+const conosciuti = new Set();   // chi è già passato dal pannello: evita di ri-spuntare chi hai tolto
 let aperta = null;    // id della task nel pannello di dettaglio
 let vista = 'lista';  // 'lista' | 'settimana'
 let lunedi = null;    // ISO del lunedì della settimana mostrata nel calendario
@@ -51,9 +53,29 @@ const minutiDi = hhmm => +String(hhmm).slice(0, 2) * 60 + +String(hhmm).slice(3,
 const inizioMin = t => minutiDi(t.ora_inizio);
 const fineMin = t => t.ora_fine ? minutiDi(t.ora_fine) : inizioMin(t) + (t.minuti || 30);
 const coloreDi = id => {
-  const i = PERSONE.findIndex(p => p.user_id === id);
+  const i = GENTE.findIndex(p => p.id === id);
   return PALETTE[(i < 0 ? 0 : i) % PALETTE.length];
 };
+
+// Le persone del pannello "Calendari": il mio team + eventuali assegnatari che
+// compaiono nelle task ma non sono (più) nel team, così non spariscono righe.
+function aggiornaGente() {
+  const out = PERSONE.map(p => ({ id: p.user_id, nome: p.nome }));
+  const visti = new Set(out.map(p => p.id));
+  for (const t of TASKS) {
+    if (visti.has(t.assegnata_a)) continue;
+    visti.add(t.assegnata_a);
+    out.push({ id: t.assegnata_a, nome: t.assegnato_nome });
+  }
+  if (ME && ME.id) {                                  // io sempre in cima
+    const mio = out.findIndex(p => p.id === ME.id);
+    if (mio > 0) out.unshift(out.splice(mio, 1)[0]);
+  }
+  GENTE = out;
+  // chi compare per la prima volta parte spuntato; chi l'utente ha tolto resta tolto
+  if (!selezione) selezione = new Set();
+  for (const p of GENTE) if (!conosciuti.has(p.id)) { conosciuti.add(p.id); selezione.add(p.id); }
+}
 
 // ── dati ─────────────────────────────────────────────────────────────────────
 async function carica() {
@@ -75,8 +97,9 @@ function bucket(t) {
 }
 
 function visibili() {
-  return TASKS.filter(t => chi === 'tutti' || t.assegnata_a === chi);
+  return TASKS.filter(t => selezione.has(t.assegnata_a));
 }
+const tutteSpuntate = () => GENTE.every(p => selezione.has(p.id));
 
 // ── riga ─────────────────────────────────────────────────────────────────────
 function rigaTask(t) {
@@ -120,12 +143,46 @@ function disegna() {
     b.classList.toggle('active', b.dataset.vista === vista));
   _mount.querySelector('.tk-tabs').classList.toggle('hidden', vista !== 'lista');
   _mount.querySelector('#tkCalBar').classList.toggle('hidden', vista !== 'settimana');
+  disegnaRail();
 
   if (vista === 'settimana') disegnaSettimana(lista); else disegnaLista(lista);
 
   _mount.querySelectorAll('[data-task]').forEach(r => {
     r.onclick = () => { aperta = +r.dataset.task; disegnaPannello(); };
   });
+}
+
+// ── pannello "Calendari" (spunte per persona) ────────────────────────────────
+// Sostituisce la vecchia tendina Persona: si vedono più calendari sovrapposti,
+// ognuno col suo colore. Con una persona sola non serve e sparisce.
+function disegnaRail() {
+  const rail = _mount.querySelector('#tkRail');
+  if (GENTE.length < 2) { rail.classList.add('hidden'); return; }
+  rail.classList.remove('hidden');
+  const spunta = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4"><path d="M5 12l5 5L20 6"/></svg>';
+  rail.innerHTML = `
+    <div class="rail-h">Calendari
+      <button class="rail-tutti" id="railTutti">${tutteSpuntate() ? 'Solo io' : 'Tutti'}</button>
+    </div>
+    ${GENTE.map(p => {
+      const on = selezione.has(p.id);
+      const col = coloreDi(p.id);
+      return `<button class="rail-item ${on ? 'on' : ''}" data-persona="${p.id}" title="${esc(p.nome)}">
+        <span class="rail-box" style="border-color:${col};background:${on ? col : 'transparent'}">${on ? spunta : ''}</span>
+        <span class="rail-nm">${esc(p.nome)}${p.id === ME.id ? ' <small>(io)</small>' : ''}</span>
+      </button>`;
+    }).join('')}`;
+
+  rail.querySelectorAll('[data-persona]').forEach(b => b.onclick = () => {
+    const id = b.dataset.persona;
+    selezione.has(id) ? selezione.delete(id) : selezione.add(id);
+    if (!selezione.size) selezione.add(id);          // almeno un calendario acceso
+    disegna();
+  });
+  rail.querySelector('#railTutti').onclick = () => {
+    selezione = tutteSpuntate() ? new Set([ME.id]) : new Set(GENTE.map(p => p.id));
+    disegna();
+  };
 }
 
 function disegnaLista(lista) {
@@ -136,9 +193,7 @@ function disegnaLista(lista) {
 
   _mount.querySelector('#tkList').innerHTML = righe.length
     ? righe.map(rigaTask).join('')
-    : `<div class="tk-vuoto">${chi === 'tutti'
-        ? 'Nessuna task qui.'
-        : 'Nessuna task qui per ' + esc(nomeDi(chi)) + '.'}</div>`;
+    : `<div class="tk-vuoto">Nessuna task qui${tutteSpuntate() ? '' : ' nei calendari spuntati'}.</div>`;
 }
 
 // ── vista settimana ──────────────────────────────────────────────────────────
@@ -200,8 +255,6 @@ function disegnaSettimana(lista) {
     ${dellaSettimana.length ? '' : '<div class="tk-vuoto">Nessuna task in questa settimana.</div>'}`;
 
   _mount.querySelector('#calEtichetta').textContent = etichettaSettimana(giorni);
-  _mount.querySelector('#calLegenda').innerHTML = (chi === 'tutti' ? PERSONE : PERSONE.filter(p => p.user_id === chi))
-    .map(p => `<span class="cal-leg"><span class="cal-pallino" style="background:${coloreDi(p.user_id)}"></span>${esc(p.nome)}</span>`).join('');
 
   _mount.querySelectorAll('[data-nuova]').forEach(s => {
     s.onclick = () => apriForm(null, { data: s.dataset.nuova, ora: s.dataset.ora });
@@ -225,7 +278,7 @@ function bloccoTask(t, senzaOra, pos) {
   const stile = senzaOra
     ? `background:${coloreDi(t.assegnata_a)}`
     : `top:${pos.top}px;height:${pos.alt}px;left:${pos.left}%;width:${pos.largh}%;background:${coloreDi(t.assegnata_a)}`;
-  const sotto = [t.centro_nome, chi === 'tutti' ? t.assegnato_nome.split(' ')[0] : ''].filter(Boolean).join(' · ');
+  const sotto = [t.centro_nome, selezione.size > 1 ? t.assegnato_nome.split(' ')[0] : ''].filter(Boolean).join(' · ');
   // sotto i 34px non c'è spazio per la seconda riga: resta solo il titolo
   const corta = !senzaOra && pos.alt < 34 ? ' corta' : '';
   return `<button class="cal-ev${corta} ${t.stato === 'done' ? 'fatta' : ''} ${senzaOra ? 'nohour' : ''}"
@@ -335,6 +388,7 @@ async function ricarica() {
   const { data, error } = await supabase.rpc('ms_task_lista');
   if (error) throw error;
   TASKS = data || [];
+  aggiornaGente();
 }
 
 async function salvaCampo(id, patch) {
@@ -478,17 +532,17 @@ export async function render(mount) {
           <button data-vista="lista">Lista</button>
           <button data-vista="settimana">Calendario</button>
         </div>
-        <label class="consulente-wrap tk-chi">Persona
-          <select id="tkChi"><option value="tutti">Tutto il team</option></select></label>
       </div>
       <div class="cal-bar hidden" id="tkCalBar">
         <button class="cal-nav" id="calPrec" title="Settimana precedente">‹</button>
         <button class="tk-btn cal-oggi" id="calOggi">Oggi</button>
         <button class="cal-nav" id="calSucc" title="Settimana successiva">›</button>
         <span class="cal-etichetta" id="calEtichetta"></span>
-        <span class="cal-legenda" id="calLegenda"></span>
       </div>
-      <div id="tkList"></div>
+      <div class="tk-wrap">
+        <aside class="cal-rail hidden" id="tkRail"></aside>
+        <div id="tkList"></div>
+      </div>
     </div>
     <div class="tk-scrim" id="tkScrim"></div>
     <aside class="tk-panel" id="tkPanel"></aside>
@@ -505,12 +559,7 @@ export async function render(mount) {
 
   ME = { id: utente ? utente.id : null };
   ME.nome = nomeDi(ME.id);
-
-  const sel = mount.querySelector('#tkChi');
-  sel.innerHTML = '<option value="tutti">Tutto il team</option>' + PERSONE.map(p =>
-    `<option value="${p.user_id}">${esc(p.user_id === ME.id ? p.nome + ' (io)' : p.nome)}</option>`).join('');
-  sel.value = chi = (chi !== 'tutti' && PERSONE.some(p => p.user_id === chi)) ? chi : 'tutti';
-  sel.onchange = () => { chi = sel.value; disegna(); };
+  aggiornaGente();
 
   mount.querySelectorAll('.tk-tabs button').forEach(b =>
     b.onclick = () => { tab = b.dataset.tab; disegna(); });

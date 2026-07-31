@@ -717,9 +717,40 @@ select.ac-vede {
 }
 .cal-nav:hover { background: var(--row-hover); color: var(--text-primary); }
 .cal-etichetta { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-left: 4px; }
-.cal-legenda { display: flex; flex-wrap: wrap; gap: 10px; margin-left: auto; }
-.cal-leg { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-secondary); }
-.cal-pallino { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+
+/* pannello "Calendari": una spunta colorata per persona (sostituisce la tendina) */
+.tk-wrap { display: flex; align-items: flex-start; gap: 16px; }
+.tk-wrap > #tkList { flex: 1; min-width: 0; }
+.cal-rail {
+  width: 208px; flex: none; padding: 10px 8px 12px;
+  background: var(--row-alt); border: 1px solid var(--border); border-radius: 12px;
+}
+.rail-h {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted); padding: 2px 8px 8px;
+}
+.rail-tutti {
+  font: inherit; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: none;
+  margin-left: auto; padding: 2px 8px; cursor: pointer;
+  background: transparent; color: var(--series-1);
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.rail-tutti:hover { background: var(--row-hover); }
+.rail-item {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  font: inherit; font-size: 12.5px; cursor: pointer; padding: 5px 8px; border-radius: 8px;
+  background: transparent; color: var(--text-secondary); border: none;
+}
+.rail-item:hover { background: var(--row-hover); }
+.rail-item.on { color: var(--text-primary); font-weight: 600; }
+.rail-box {
+  width: 17px; height: 17px; flex: none; border-radius: 5px;
+  border: 2px solid var(--baseline); display: grid; place-items: center;
+}
+.rail-box svg { width: 10px; height: 10px; }
+.rail-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-nm small { color: var(--muted); font-weight: 500; }
 
 .cal { border: 1px solid var(--grid); border-radius: 12px; overflow: auto; }
 .cal-head { display: grid; grid-template-columns: 56px repeat(7, minmax(96px, 1fr)); border-bottom: 1px solid var(--grid); }
@@ -763,11 +794,16 @@ select.ac-vede {
 .cal-ev-t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal-ev-s { display: block; font-size: 10px; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+@media (max-width: 820px) {
+  /* su schermo stretto i calendari diventano una riga di spunte sopra la lista */
+  .tk-wrap { flex-direction: column; }
+  .cal-rail { width: 100%; display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: center; }
+  .rail-h { width: 100%; padding-bottom: 4px; }
+  .rail-item { width: auto; }
+}
 @media (max-width: 640px) {
-  .tk-chi { margin-left: 0; }
   .tk-time { width: 58px; }
   .tk-min, .tk-caret { display: none; }
   .tk-campi { grid-template-columns: 1fr; }
   .tk-panel { width: 100%; }
-  .cal-legenda { margin-left: 0; width: 100%; }
 }
