@@ -59,11 +59,17 @@ export async function render(mount, params) {
       .gte('mese_coorte', COORTE_MIN)
       .range(lo, hi));
 
-  // filtro consulente via mappa centri
-  if (f.consulente) {
+  // filtri consulente / media buyer via mappa centri
+  if (f.consulente || f.mediaBuyer) {
     try { await loadCentri(); } catch (e) { /* ignore */ }
     const map = centriMap();
-    rows = rows.filter(r => { const c = map.get(r.centro_id); return c && c.consulente === f.consulente; });
+    rows = rows.filter(r => {
+      const c = map.get(r.centro_id);
+      if (!c) return false;
+      if (f.consulente && c.consulente !== f.consulente) return false;
+      if (f.mediaBuyer && c.media_buyer !== f.mediaBuyer) return false;
+      return true;
+    });
   }
 
   _rows = aggregate(rows);

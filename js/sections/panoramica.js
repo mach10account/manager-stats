@@ -1,6 +1,6 @@
 // manager-stats · Sezione Panoramica — KPI azienda + tabella per-centro
 import { supabase } from '../supabase.js';
-import { fetchAll } from '../data.js';
+import { fetchAll, loadCentri, centriMap } from '../data.js';
 import { getFilters } from '../filters.js';
 import { navigate } from '../router.js';
 import { renderTable, renderKpiGroups } from '../tables.js';
@@ -123,6 +123,15 @@ export async function render(mount, params) {
 
   let rows = aggregate(daily);
   if (f.consulente) rows = rows.filter(r => r.consulente === f.consulente);
+  // il media buyer non e' nella vista: si passa dall'anagrafica centri
+  if (f.mediaBuyer) {
+    try { await loadCentri(); } catch (e) { /* anagrafica non disponibile */ }
+    const map = centriMap();
+    rows = rows.filter(r => {
+      const c = map.get(r.centro_id);
+      return c && c.media_buyer === f.mediaBuyer;
+    });
+  }
   _rows = rows;
 
   const st = mount.querySelector('#pnStatus');

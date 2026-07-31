@@ -28,7 +28,7 @@ export async function loadCentri() {
   if (_centri) return _centri;
   _centri = await fetchAll((lo, hi) =>
     supabase.from('centri')
-      .select('notion_id,nome,fb_ad_account_id,agenzia,stato_attivita,consulente')
+      .select('notion_id,nome,fb_ad_account_id,agenzia,stato_attivita,consulente,media_buyer')
       .range(lo, hi));
   _centriById = new Map(_centri.map(c => [c.notion_id, c]));
   return _centri;

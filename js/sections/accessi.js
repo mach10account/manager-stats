@@ -16,26 +16,30 @@ const SEZIONI = [
 ];
 
 let UTENTI = [];
-let CENTRI = [];       // { notion_id, nome, consulente } per select consulente + picker
+let CENTRI = [];       // { notion_id, nome, consulente, media_buyer } per le select + picker
 let CONSULENTI = [];   // email distinte da centri.consulente
+let MEDIA_BUYER = [];  // email distinte da centri.media_buyer
 let _mount = null;
 
 const dataLeggibile = iso => !iso ? 'mai' :
   new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: '2-digit' });
 
-// modalità visibilità di un utente: '' = tutti · 'c:<email>' = centri del consulente
-// · 'picker' = allowlist esplicita
+// modalità visibilità: '' = tutti · 'c:<email>' = centri del consulente
+// · 'm:<email>' = centri del media buyer · 'picker' = allowlist esplicita
 const modoDi = u => u.consulente ? 'c:' + u.consulente
+  : u.media_buyer ? 'm:' + u.media_buyer
   : (Array.isArray(u.centri_visibili) && u.centri_visibili.length ? 'picker' : '');
 
 function celleVede(u, i) {
   const admin = u.sezioni.includes('admin');
   if (admin) return '<td><span class="ac-tutti">Tutti (admin)</span></td>';
   const modo = u._modo ?? modoDi(u);
+  const opt = (val, label) =>
+    `<option value="${esc(val)}" ${modo === val ? 'selected' : ''}>${esc(label)}</option>`;
   const opzioni = ['<option value="">Tutti i centri</option>']
-    .concat(CONSULENTI.map(c =>
-      `<option value="c:${esc(c)}" ${modo === 'c:' + c ? 'selected' : ''}>Consulente: ${esc(c)}</option>`))
-    .concat([`<option value="picker" ${modo === 'picker' ? 'selected' : ''}>Solo centri scelti…</option>`]);
+    .concat(CONSULENTI.map(c => opt('c:' + c, 'Consulente: ' + c)))
+    .concat(MEDIA_BUYER.map(m => opt('m:' + m, 'Media buyer: ' + m)))
+    .concat([opt('picker', 'Solo centri scelti…')]);
   const n = (u._centri ?? u.centri_visibili ?? []).length;
   return `<td><select data-i="${i}" class="ac-vede">${opzioni.join('')}</select>
     ${modo === 'picker' ? `<div class="ac-npicked">${n} centr${n === 1 ? 'o' : 'i'} selezionat${n === 1 ? 'o' : 'i'}</div>` : ''}</td>`;
@@ -131,12 +135,16 @@ function disegna() {
 
       const modo = u._modo ?? modoDi(u);
       const consulente = modo.startsWith('c:') ? modo.slice(2) : null;
+      const mediaBuyer = modo.startsWith('m:') ? modo.slice(2) : null;
       const centri = modo === 'picker' ? (u._centri ?? u.centri_visibili ?? []) : [];
-      const r2 = await supabase.rpc('ms_imposta_scope',
-        { p_user: u.user_id, p_consulente: consulente, p_centri: centri });
+      const r2 = await supabase.rpc('ms_imposta_scope', {
+        p_user: u.user_id, p_consulente: consulente,
+        p_media_buyer: mediaBuyer, p_centri: centri,
+      });
       b.disabled = false;
       if (r2.error) { msg.textContent = r2.error.message; msg.className = 'ac-msg val-bad'; return; }
       u.consulente = consulente;
+      u.media_buyer = mediaBuyer;
       u.centri_visibili = modo === 'picker' && centri.length ? centri : null;
 
       msg.textContent = 'Salvato'; msg.className = 'ac-msg val-good';
@@ -160,7 +168,7 @@ export async function render(mount) {
 
   const [utenti, centri] = await Promise.all([
     supabase.rpc('ms_lista_utenti'),
-    supabase.from('centri').select('notion_id,nome,consulente').order('nome'),
+    supabase.from('centri').select('notion_id,nome,consulente,media_buyer').order('nome'),
   ]);
   const st = mount.querySelector('#acStatus');
   if (!st) return;                                   // render obsoleto
@@ -172,6 +180,7 @@ export async function render(mount) {
   UTENTI = (utenti.data || []).map(u => ({ ...u, sezioni: Array.isArray(u.sezioni) ? [...u.sezioni] : [] }));
   CENTRI = centri.data || [];
   CONSULENTI = [...new Set(CENTRI.map(c => c.consulente).filter(Boolean))].sort();
+  MEDIA_BUYER = [...new Set(CENTRI.map(c => c.media_buyer).filter(Boolean))].sort();
   st.remove();
   disegna();
 }

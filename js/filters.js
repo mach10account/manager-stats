@@ -3,15 +3,15 @@
 import { todayRome, dstr, esc } from './format.js';
 import { loadCentri } from './data.js';
 
-const state = { from: null, to: null, consulente: '' };
+const state = { from: null, to: null, consulente: '', mediaBuyer: '' };
 
-// Il filtro Consulente serve solo a chi vede piu' di un consulente: per un
-// consulente limitato ai propri centri (migration 27) la tendina avrebbe una
-// voce sola. Deciso in initFilters sui centri effettivamente leggibili.
-let utile = true;
+// Consulente e Media buyer servono solo a chi ne vede piu' di uno: per chi e'
+// limitato ai propri centri (migration 27/29) la tendina avrebbe una voce sola.
+// Deciso in initFilters sui centri effettivamente leggibili.
+let utile = { consulente: true, mediaBuyer: true };
 
 export function getFilters() { return { ...state }; }
-export function filtroConsulenteUtile() { return utile; }
+export function filtroConsulenteUtile() { return utile.consulente || utile.mediaBuyer; }
 
 function dispatch() {
   document.dispatchEvent(new CustomEvent('filterchange', { detail: getFilters() }));
@@ -73,21 +73,38 @@ export async function initFilters() {
     dispatch();
   };
 
-  // select consulente (popolata dall'anagrafica centri, gia' filtrata dalla RLS:
-  // chi e' limitato a un solo consulente vedrebbe una tendina con una voce sola)
+  // select Consulente e Media buyer (popolate dall'anagrafica centri, gia'
+  // filtrata dalla RLS: chi vede un solo nome non ha bisogno della tendina)
   const sel = document.getElementById('consulenteSelect');
-  if (sel) {
-    sel.onchange = () => { state.consulente = sel.value; dispatch(); };
-    try {
-      const centri = await loadCentri();
-      const names = [...new Set(centri.map(c => c.consulente).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b));
-      sel.innerHTML = '<option value="">Tutti i consulenti</option>' +
+  const selMb = document.getElementById('mediaBuyerSelect');
+  if (sel) sel.onchange = () => { state.consulente = sel.value; dispatch(); };
+  if (selMb) selMb.onchange = () => { state.mediaBuyer = selMb.value; dispatch(); };
+
+  const riempi = (el, campo, etichettaTutti, centri) => {
+    const names = [...new Set(centri.map(c => c[campo]).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b));
+    if (el) {
+      el.innerHTML = `<option value="">${etichettaTutti}</option>` +
         names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-      utile = names.length > 1;
-    } catch (e) {
-      sel.innerHTML = '<option value="">Tutti i consulenti</option>';
     }
+    return names.length > 1;
+  };
+
+  try {
+    const centri = await loadCentri();
+    utile.consulente = riempi(sel, 'consulente', 'Tutti i consulenti', centri);
+    utile.mediaBuyer = riempi(selMb, 'media_buyer', 'Tutti i media buyer', centri);
+  } catch (e) {
+    if (sel) sel.innerHTML = '<option value="">Tutti i consulenti</option>';
+    if (selMb) selMb.innerHTML = '<option value="">Tutti i media buyer</option>';
+  }
+  // ogni coppia etichetta+tendina sparisce da sola se inutile
+  for (const [id, on] of [['consulenteSelect', utile.consulente], ['mediaBuyerSelect', utile.mediaBuyer]]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.closest('label').classList.toggle('hidden', !on);
+    const cap = el.closest('label').previousElementSibling;
+    if (cap && cap.classList.contains('filter-cap')) cap.classList.toggle('hidden', !on);
   }
 
   // default: 30 giorni, senza dispatch (il primo render lo fa il router)
