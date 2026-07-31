@@ -12,13 +12,16 @@ import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';
 import * as vendita from './sections/vendita.js';
 import * as accessi from './sections/accessi.js';
+import * as task from './sections/task.js';
 
+// l'ordine conta: la prima sezione consentita è quella su cui si atterra
 const sections = {
   '/panoramica': panoramica,
   '/marketing': marketing,
   '/coorti': coorti,
   '/beauty': beauty,
   '/vendita': vendita,
+  '/task': task,
   '/accessi': accessi,
 };
 
@@ -29,6 +32,7 @@ const permessoDi = {
   '/coorti': 'coorti',
   '/beauty': 'beauty',
   '/vendita': 'vendita',
+  '/task': 'task',              // 'task' non si assegna: ms_mie_sezioni() la dà a ogni utente attivo
   '/accessi': 'admin',
 };
 const ALIAS = { '/chiamate': '/beauty' };   // la sezione si chiamava Chiamate: i vecchi link continuano a funzionare
@@ -134,6 +138,10 @@ function renderCurrent() {
   const consulenteRow = $('consulenteRow');
   if (consulenteRow) consulenteRow.classList.toggle('hidden',
     path === '/vendita' || !filtroConsulenteUtile());
+  // in Task i filtri in alto non servono: le tab (arretrate/oggi/prossime) sono
+  // il filtro, e un preset "7 giorni" nasconderebbe le task arretrate.
+  const filterBar = $('filterBar');
+  if (filterBar) filterBar.classList.toggle('hidden', path === '/task');
   mount.innerHTML = '<div class="status loading">Caricamento…</div>';
   Promise.resolve()
     .then(() => sections[path].render(mount, route.params))

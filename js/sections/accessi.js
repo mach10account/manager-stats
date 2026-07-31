@@ -54,7 +54,7 @@ function pannelloPicker(u, i) {
       <span>${esc(c.nome || '(senza nome)')}</span>
       <span class="ac-centro-cons">${esc(c.consulente || '')}</span>
     </label>`).join('');
-  return `<tr class="ac-picker-row"><td colspan="${SEZIONI.length + 4}">
+  return `<tr class="ac-picker-row"><td colspan="${SEZIONI.length + 5}">
     <div class="ac-picker">
       <input type="search" class="ac-cerca" data-i="${i}" placeholder="Cerca centro…">
       <div class="ac-lista">${righe}</div>
@@ -64,7 +64,7 @@ function pannelloPicker(u, i) {
 function disegna() {
   const tb = _mount.querySelector('#acTable');
   tb.innerHTML =
-    '<thead><tr><th>Utente</th>' +
+    '<thead><tr><th>Utente</th><th>Nome</th>' +
     SEZIONI.map(s => `<th>${s.label}</th>`).join('') +
     '<th>Admin</th><th>Vede</th><th>Ultimo accesso</th><th></th></tr></thead><tbody>' +
     UTENTI.map((u, i) => {
@@ -73,6 +73,8 @@ function disegna() {
         ${u.sezioni.includes(s) ? 'checked' : ''} ${admin ? 'disabled' : ''}></td>`;
       return `<tr>
         <td class="name">${esc(u.email || u.user_id)}</td>
+        <td><input type="text" class="ac-nome" data-i="${i}" maxlength="80"
+             value="${esc(u.nome || '')}" placeholder="Nome e cognome"></td>
         ${SEZIONI.map(s => cella(s.key)).join('')}
         <td><input type="checkbox" data-i="${i}" data-sez="admin" ${admin ? 'checked' : ''}></td>
         ${celleVede(u, i)}
@@ -89,6 +91,10 @@ function disegna() {
       u.sezioni = cb.checked ? [...new Set([...u.sezioni, sez])] : u.sezioni.filter(s => s !== sez);
       if (sez === 'admin') disegna();   // admin implica tutto: le altre caselle si disabilitano
     };
+  });
+
+  tb.querySelectorAll('input.ac-nome').forEach(inp => {
+    inp.oninput = () => { UTENTI[+inp.dataset.i].nome = inp.value; };
   });
 
   tb.querySelectorAll('select.ac-vede').forEach(sel => {
@@ -141,8 +147,12 @@ function disegna() {
         p_user: u.user_id, p_consulente: consulente,
         p_media_buyer: mediaBuyer, p_centri: centri,
       });
+      if (r2.error) { b.disabled = false; msg.textContent = r2.error.message; msg.className = 'ac-msg val-bad'; return; }
+
+      // il nome serve alla sezione Task: senza, si ripiega sulla email
+      const r3 = await supabase.rpc('ms_imposta_nome', { p_user: u.user_id, p_nome: u.nome || null });
       b.disabled = false;
-      if (r2.error) { msg.textContent = r2.error.message; msg.className = 'ac-msg val-bad'; return; }
+      if (r3.error) { msg.textContent = r3.error.message; msg.className = 'ac-msg val-bad'; return; }
       u.consulente = consulente;
       u.media_buyer = mediaBuyer;
       u.centri_visibili = modo === 'picker' && centri.length ? centri : null;
@@ -159,6 +169,8 @@ export async function render(mount) {
     <div class="card">
       <h2>Accessi</h2>
       <div class="subtitle">Chi vede quali sezioni e quali centri. <strong>Admin</strong> vede tutto.
+        Il <strong>Nome</strong> è quello mostrato nella sezione Task (senza, si vede la email).
+        La sezione <strong>Task</strong> non si assegna: ce l'hanno tutti gli utenti attivi.
         La colonna <strong>Vede</strong> limita i dati marketing: "Consulente: …" segue in automatico
         i centri assegnati su Notion; "Solo centri scelti" è la lista fissa per i media buyer.
         Il blocco è applicato dal database: nascondere una voce di menu non basterebbe.</div>
