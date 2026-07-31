@@ -1,8 +1,9 @@
 // manager-stats · Sezione Task — le task del team
 //
 // Chi vede cosa lo decide il database (ms_team: stesso team = almeno un centro in
-// comune; admin vede tutti). Qui si disegna soltanto: tab Arretrate / Oggi /
-// Prossime / Completate, riga task, pannello di dettaglio con stato, esito e note.
+// comune; admin vede tutti). Qui si disegna soltanto: due viste sugli STESSI dati
+// (nessuna query in più) — Lista con le tab Arretrate / Oggi / Prossime /
+// Completate, e Settimana con la griglia oraria — più il pannello di dettaglio.
 // La barra Periodo in alto è nascosta da app.js: una task arretrata deve restare
 // visibile qualunque intervallo di date sia selezionato.
 import { supabase } from '../supabase.js';
@@ -22,7 +23,14 @@ let ME = null;        // { id, nome }
 let tab = 'oggi';
 let chi = 'tutti';    // 'tutti' | user_id
 let aperta = null;    // id della task nel pannello di dettaglio
+let vista = 'lista';  // 'lista' | 'settimana'
+let lunedi = null;    // ISO del lunedì della settimana mostrata nel calendario
 let _mount = null;
+
+const GG = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'];
+const MESI = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+// colori per persona nel calendario (palette del design system + varianti)
+const PALETTE = ['#2270d8', '#0f9f85', '#c9591b', '#7a5c9e', '#2e71af', '#b3891a', '#c0453b', '#3e9a6a'];
 
 const OGGI = () => dstr(todayRome());
 const nomeDi = id => (PERSONE.find(p => p.user_id === id) || {}).nome || '—';
@@ -30,6 +38,22 @@ const oraBreve = t => t ? String(t).slice(0, 5) : '';
 const dataBreve = d => d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '';
 const arretrata = t => t.stato !== 'done' && t.data < OGGI();
 const etichetta = (lista, k) => (lista.find(x => x[0] === k) || [, '—'])[1];
+
+// ── date del calendario ──────────────────────────────────────────────────────
+const giornoDa = iso => new Date(iso + 'T12:00:00');
+const piuGiorni = (iso, n) => { const d = giornoDa(iso); d.setDate(d.getDate() + n); return dstr(d); };
+function lunediDi(iso) {
+  const d = giornoDa(iso);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return dstr(d);
+}
+const minutiDi = hhmm => +String(hhmm).slice(0, 2) * 60 + +String(hhmm).slice(3, 5);
+const inizioMin = t => minutiDi(t.ora_inizio);
+const fineMin = t => t.ora_fine ? minutiDi(t.ora_fine) : inizioMin(t) + (t.minuti || 30);
+const coloreDi = id => {
+  const i = PERSONE.findIndex(p => p.user_id === id);
+  return PALETTE[(i < 0 ? 0 : i) % PALETTE.length];
+};
 
 // ── dati ─────────────────────────────────────────────────────────────────────
 async function carica() {
@@ -68,7 +92,7 @@ function rigaTask(t) {
     arretrata(t) ? chip('tk-late', 'Arretrata') : '',
     t.n_note ? `<span class="tk-note">${t.n_note} not${t.n_note === 1 ? 'a' : 'e'}</span>` : '',
   ].join('');
-  return `<button class="tk-row" data-id="${t.id}">
+  return `<button class="tk-row" data-task="${t.id}">
     <span class="tk-time">${quando}</span>
     <span class="tk-body">
       <span class="tk-title">${esc(t.titolo)}</span>
@@ -92,7 +116,19 @@ function disegna() {
     b.classList.toggle('active', b.dataset.tab === tab);
     b.querySelector('.tk-count').textContent = conta[b.dataset.tab];
   });
+  _mount.querySelectorAll('.tk-vista button').forEach(b =>
+    b.classList.toggle('active', b.dataset.vista === vista));
+  _mount.querySelector('.tk-tabs').classList.toggle('hidden', vista !== 'lista');
+  _mount.querySelector('#tkCalBar').classList.toggle('hidden', vista !== 'settimana');
 
+  if (vista === 'settimana') disegnaSettimana(lista); else disegnaLista(lista);
+
+  _mount.querySelectorAll('[data-task]').forEach(r => {
+    r.onclick = () => { aperta = +r.dataset.task; disegnaPannello(); };
+  });
+}
+
+function disegnaLista(lista) {
   const righe = lista.filter(t => bucket(t) === tab).sort((a, b) => {
     const ka = a.data + (a.ora_inizio || '99'), kb = b.data + (b.ora_inizio || '99');
     return tab === 'completate' ? kb.localeCompare(ka) : ka.localeCompare(kb);
@@ -103,10 +139,105 @@ function disegna() {
     : `<div class="tk-vuoto">${chi === 'tutti'
         ? 'Nessuna task qui.'
         : 'Nessuna task qui per ' + esc(nomeDi(chi)) + '.'}</div>`;
+}
 
-  _mount.querySelectorAll('.tk-row').forEach(r => {
-    r.onclick = () => { aperta = +r.dataset.id; disegnaPannello(); };
+// ── vista settimana ──────────────────────────────────────────────────────────
+// Griglia oraria lunedì→domenica sulle task già in memoria. Le task senza orario
+// finiscono nella fascia in cima al giorno; cliccando uno slot vuoto si apre il
+// form già compilato con quel giorno e quell'ora.
+function disegnaSettimana(lista) {
+  const ALTEZZA = 44;                                   // px per ora
+  const giorni = [...Array(7)].map((_, i) => piuGiorni(lunedi, i));
+  const dellaSettimana = lista.filter(t => t.data >= giorni[0] && t.data <= giorni[6]);
+
+  // la fascia oraria si allarga se qualcuno lavora prima delle 8 o dopo le 20
+  let H0 = 8, H1 = 20;
+  for (const t of dellaSettimana) {
+    if (!t.ora_inizio) continue;
+    H0 = Math.min(H0, Math.floor(inizioMin(t) / 60));
+    H1 = Math.max(H1, Math.ceil(fineMin(t) / 60));
+  }
+  const ore = [...Array(H1 - H0)].map((_, i) => H0 + i);
+
+  const intestazione = giorni.map(iso => {
+    const d = giornoDa(iso);
+    return `<div class="cal-giorno ${iso === OGGI() ? 'oggi' : ''}">
+      <span class="cal-gg">${GG[(d.getDay() + 6) % 7]}</span>
+      <span class="cal-dd">${d.getDate()}</span></div>`;
+  }).join('');
+
+  // fascia "senza orario": task del giorno che non hanno un'ora di inizio
+  const senzaOra = giorni.map(iso => {
+    const ts = dellaSettimana.filter(t => t.data === iso && !t.ora_inizio);
+    return `<div class="cal-nohour">${ts.map(t => bloccoTask(t, true)).join('')}</div>`;
+  }).join('');
+
+  const colonne = giorni.map(iso => {
+    const ts = dellaSettimana.filter(t => t.data === iso && t.ora_inizio)
+      .sort((a, b) => inizioMin(a) - inizioMin(b) || fineMin(a) - fineMin(b));
+    const corsie = disponiCorsie(ts);
+    const slot = ore.map(h =>
+      `<button class="cal-slot" style="height:${ALTEZZA}px" data-nuova="${iso}" data-ora="${String(h).padStart(2, '0')}:00"
+        title="Assegna una task alle ${h}:00"></button>`).join('');
+    const eventi = ts.map(t => {
+      const top = (inizioMin(t) - H0 * 60) / 60 * ALTEZZA;
+      const alt = Math.max((fineMin(t) - inizioMin(t)) / 60 * ALTEZZA - 2, 22);
+      const largh = 100 / corsie;
+      return bloccoTask(t, false, { top, alt, left: t._corsia * largh, largh });
+    }).join('');
+    return `<div class="cal-col ${iso === OGGI() ? 'oggi' : ''}" style="height:${ore.length * ALTEZZA}px">${slot}${eventi}</div>`;
+  }).join('');
+
+  const gutter = `<div class="cal-gutter">${ore.map(h =>
+    `<div class="cal-ora" style="height:${ALTEZZA}px">${h}:00</div>`).join('')}</div>`;
+
+  _mount.querySelector('#tkList').innerHTML = `
+    <div class="cal">
+      <div class="cal-head"><div class="cal-gutter-head"></div>${intestazione}</div>
+      <div class="cal-head cal-head-nohour"><div class="cal-gutter-head">senza ora</div>${senzaOra}</div>
+      <div class="cal-body">${gutter}<div class="cal-grid">${colonne}</div></div>
+    </div>
+    ${dellaSettimana.length ? '' : '<div class="tk-vuoto">Nessuna task in questa settimana.</div>'}`;
+
+  _mount.querySelector('#calEtichetta').textContent = etichettaSettimana(giorni);
+  _mount.querySelector('#calLegenda').innerHTML = (chi === 'tutti' ? PERSONE : PERSONE.filter(p => p.user_id === chi))
+    .map(p => `<span class="cal-leg"><span class="cal-pallino" style="background:${coloreDi(p.user_id)}"></span>${esc(p.nome)}</span>`).join('');
+
+  _mount.querySelectorAll('[data-nuova]').forEach(s => {
+    s.onclick = () => apriForm(null, { data: s.dataset.nuova, ora: s.dataset.ora });
   });
+}
+
+// due task sovrapposte si dividono la larghezza della colonna
+function disponiCorsie(ts) {
+  const fineCorsia = [];
+  for (const t of ts) {
+    let messa = false;
+    for (let i = 0; i < fineCorsia.length; i++) {
+      if (fineCorsia[i] <= inizioMin(t)) { t._corsia = i; fineCorsia[i] = fineMin(t); messa = true; break; }
+    }
+    if (!messa) { t._corsia = fineCorsia.length; fineCorsia.push(fineMin(t)); }
+  }
+  return fineCorsia.length || 1;
+}
+
+function bloccoTask(t, senzaOra, pos) {
+  const stile = senzaOra
+    ? `background:${coloreDi(t.assegnata_a)}`
+    : `top:${pos.top}px;height:${pos.alt}px;left:${pos.left}%;width:${pos.largh}%;background:${coloreDi(t.assegnata_a)}`;
+  const sotto = [t.centro_nome, chi === 'tutti' ? t.assegnato_nome.split(' ')[0] : ''].filter(Boolean).join(' · ');
+  // sotto i 34px non c'è spazio per la seconda riga: resta solo il titolo
+  const corta = !senzaOra && pos.alt < 34 ? ' corta' : '';
+  return `<button class="cal-ev${corta} ${t.stato === 'done' ? 'fatta' : ''} ${senzaOra ? 'nohour' : ''}"
+    data-task="${t.id}" style="${stile}" title="${esc(t.titolo)}">
+    <span class="cal-ev-t">${senzaOra ? '' : '<b>' + oraBreve(t.ora_inizio) + '</b> '}${esc(t.titolo)}</span>
+    ${sotto ? `<span class="cal-ev-s">${esc(sotto)}</span>` : ''}</button>`;
+}
+
+function etichettaSettimana(giorni) {
+  const a = giornoDa(giorni[0]), b = giornoDa(giorni[6]);
+  const primo = a.getDate() + (a.getMonth() === b.getMonth() ? '' : ' ' + MESI[a.getMonth()]);
+  return `${primo} – ${b.getDate()} ${MESI[b.getMonth()]} ${b.getFullYear()}`;
 }
 
 function disegnaPannello() {
@@ -237,8 +368,11 @@ async function elimina(id) {
 }
 
 // ── form crea / modifica ─────────────────────────────────────────────────────
-function apriForm(t) {
+// pre = { data, ora } quando si arriva da uno slot del calendario
+function apriForm(t, pre) {
+  pre = pre || {};
   const box = _mount.querySelector('#tkForm');
+  const oraFine = pre.ora ? String(+pre.ora.slice(0, 2) + 1).padStart(2, '0') + ':00' : '';
   const opt = (v, l, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(l)}</option>`;
   const persone = PERSONE.map(p => opt(p.user_id, p.user_id === ME.id ? p.nome + ' (io)' : p.nome,
     t ? t.assegnata_a === p.user_id : p.user_id === ME.id)).join('');
@@ -259,11 +393,11 @@ function apriForm(t) {
       <label class="tk-campo">Assegna a<select id="fAss">${persone}</select></label>
       <label class="tk-campo">Tipo attività<select id="fCat">${cat}</select></label>
       <label class="tk-campo tk-largo">Centro (facoltativo)<select id="fCentro">${centri}</select></label>
-      <label class="tk-campo">Data<input type="date" id="fData" value="${t ? t.data : OGGI()}"></label>
+      <label class="tk-campo">Data<input type="date" id="fData" value="${t ? t.data : (pre.data || OGGI())}"></label>
       <label class="tk-campo">Minuti<input type="number" id="fMin" min="1" max="1440" step="5"
              value="${t && t.minuti ? t.minuti : ''}" placeholder="30"></label>
-      <label class="tk-campo">Inizio<input type="time" id="fIni" value="${t ? oraBreve(t.ora_inizio) : ''}"></label>
-      <label class="tk-campo">Fine<input type="time" id="fFin" value="${t ? oraBreve(t.ora_fine) : ''}"></label>
+      <label class="tk-campo">Inizio<input type="time" id="fIni" value="${t ? oraBreve(t.ora_inizio) : (pre.ora || '')}"></label>
+      <label class="tk-campo">Fine<input type="time" id="fFin" value="${t ? oraBreve(t.ora_fine) : oraFine}"></label>
       <label class="tk-campo tk-largo">Note iniziali (facoltative)
         <textarea id="fDescr" rows="2" placeholder="Contesto, link, cosa serve">${t && t.descrizione ? esc(t.descrizione) : ''}</textarea></label>
     </div>
@@ -315,7 +449,11 @@ async function salvaForm(t, chiudi) {
 
   chiudi();
   await ricarica();
-  if (!t) { tab = bucket({ ...riga, stato: 'todo' }); }   // porta l'utente dove è finita la task
+  // porta l'utente dove è finita la task: tab giusta in lista, settimana giusta nel calendario
+  if (!t) {
+    if (vista === 'settimana') lunedi = lunediDi(riga.data);
+    else tab = bucket({ ...riga, stato: 'todo' });
+  }
   disegna();
   if (aperta) disegnaPannello();
 }
@@ -331,12 +469,24 @@ export async function render(mount) {
         <button class="tk-btn tk-btn-pri" id="tkNuova">+ Assegna task</button>
       </div>
       <div class="subtitle">Le task tue e delle persone con cui condividi i centri.
-        Chiunque può assegnarne una a chiunque del team; stato ed esito li può aggiornare chi la vede.</div>
+        Chiunque può assegnarne una a chiunque del team; stato ed esito li può aggiornare chi la vede.
+        In <strong>Settimana</strong> clicca un'ora vuota per assegnare una task in quel momento.</div>
       <div class="tk-barra">
         <div class="lead-tabs tk-tabs">${TABS.map(([k, l]) =>
           `<button data-tab="${k}">${l} <span class="tk-count">0</span></button>`).join('')}</div>
+        <div class="lead-tabs tk-vista">
+          <button data-vista="lista">Lista</button>
+          <button data-vista="settimana">Settimana</button>
+        </div>
         <label class="consulente-wrap tk-chi">Persona
           <select id="tkChi"><option value="tutti">Tutto il team</option></select></label>
+      </div>
+      <div class="cal-bar hidden" id="tkCalBar">
+        <button class="cal-nav" id="calPrec" title="Settimana precedente">‹</button>
+        <button class="tk-btn cal-oggi" id="calOggi">Oggi</button>
+        <button class="cal-nav" id="calSucc" title="Settimana successiva">›</button>
+        <span class="cal-etichetta" id="calEtichetta"></span>
+        <span class="cal-legenda" id="calLegenda"></span>
       </div>
       <div id="tkList"></div>
     </div>
@@ -364,12 +514,18 @@ export async function render(mount) {
 
   mount.querySelectorAll('.tk-tabs button').forEach(b =>
     b.onclick = () => { tab = b.dataset.tab; disegna(); });
+  mount.querySelectorAll('.tk-vista button').forEach(b =>
+    b.onclick = () => { vista = b.dataset.vista; disegna(); });
+  mount.querySelector('#calPrec').onclick = () => { lunedi = piuGiorni(lunedi, -7); disegna(); };
+  mount.querySelector('#calSucc').onclick = () => { lunedi = piuGiorni(lunedi, 7); disegna(); };
+  mount.querySelector('#calOggi').onclick = () => { lunedi = lunediDi(OGGI()); disegna(); };
   mount.querySelector('#tkNuova').onclick = () => apriForm(null);
   mount.querySelector('#tkScrim').onclick = chiudiPannello;
 
   // se non c'è niente per oggi ma ci sono arretrati, parti da lì
   const conta = k => TASKS.filter(t => bucket(t) === k).length;
   if (!conta('oggi') && conta('arretrate')) tab = 'arretrate';
+  if (!lunedi) lunedi = lunediDi(OGGI());
 
   disegna();
 }
