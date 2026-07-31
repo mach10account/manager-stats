@@ -1,37 +1,22 @@
 -- manager-stats · Migration 30 · "Risposte" nel funnel marketing
 --
--- Una risposta = il lead e' stato effettivamente raggiunto, a prescindere
--- dall'esito commerciale. In Notion non esiste un campo dedicato: si deriva
--- dall'ESITO, classificato in mkt_esiti come gia' si fa per is_appuntamento.
+-- ⚠️ La definizione NON si inventa: e' la stessa della sezione **Beauty**
+-- (vista `agg_coorte_centro_giorno`, modalita' "per data inserimento lead"):
+--     count(*) filter (where coalesce(esiti.is_answered, false))
+-- dove l'esito e' quello dell'ULTIMA chiamata CRM4 del lead. `esiti.is_answered`
+-- e' gia' curata nel warehouse chiamate: unica fonte di verita', un solo posto
+-- da correggere se cambia la classificazione.
 --
--- Default conservativo: i nuovi esiti nascono is_risposta = false (coerente con
--- class='unknown' + needs_review del sync), cosi' un esito sconosciuto non
--- gonfia il tasso. Leo puo' ribaltare qualsiasi riga dal Table Editor.
+-- Aggancio marketing → CRM4: `mkt_leads.crm4_lead_id` = `calls.campaign_contact_id`
+-- (copertura 18.650/18.661 = 99,9% sui 90 gg).
 --
--- Sui 90 giorni al 31/07/2026: 11.057 risposte su 18.754 lead = 59,0%.
+-- Una prima versione derivava le risposte dall'ESITO Notion (mkt_esiti.is_risposta):
+-- scartata su indicazione di Leo. La colonna e' stata rimossa per non lasciare in
+-- giro un campo che sembra pilotare il funnel e invece non fa nulla.
+--
+-- Sui 90 gg al 31/07/2026: 11.097 risposte su 18.754 lead = 59,2%.
 
-alter table public.mkt_esiti add column if not exists is_risposta boolean not null default false;
-comment on column public.mkt_esiti.is_risposta is
-  'true = l''esito implica che il lead ha risposto. Modificabile da Table Editor.';
-
--- non risposta: mai raggiunto, numero non valido, riga tecnica
-update public.mkt_esiti set is_risposta = false where esito in (
-  'Non risponde','Occupato','Segreteria da richiamare','Fax da richiamare',
-  '1 RICHIAMO NO RISP','2 RICHIAMO NO RISP','3 RICHIAMO NO RISP','5 RICHIAMO STOP CALL',
-  'DOPPIO SQUILLO Cellulare','DOPPIO SQUILLO Cellulare personale',
-  'MAI RISPOSTO (Tentativi Misti)','Numero errato','Blacklist - Iscritto al FUB',
-  'Fax da non contattare piu''','Segreteria da non contattare piu''',
-  'Occupato da non contattare piu''','Ricontattabile','Errore','Lead da Api');
-
--- risposta: tutto il resto degli esiti censiti (appuntamenti, persi dopo
--- contatto, attese acconto, richiami concordati, presa in gestione dal centro)
-update public.mkt_esiti set is_risposta = true where esito not in (
-  'Non risponde','Occupato','Segreteria da richiamare','Fax da richiamare',
-  '1 RICHIAMO NO RISP','2 RICHIAMO NO RISP','3 RICHIAMO NO RISP','5 RICHIAMO STOP CALL',
-  'DOPPIO SQUILLO Cellulare','DOPPIO SQUILLO Cellulare personale',
-  'MAI RISPOSTO (Tentativi Misti)','Numero errato','Blacklist - Iscritto al FUB',
-  'Fax da non contattare piu''','Segreteria da non contattare piu''',
-  'Occupato da non contattare piu''','Ricontattabile','Errore','Lead da Api');
+alter table public.mkt_esiti drop column if exists is_risposta;
 
 -- ── viste: colonna risposte in coda (CREATE OR REPLACE ammette solo append) ──
 create or replace view public.agg_mkt_ad_giorno with (security_invoker = on) as
@@ -57,15 +42,27 @@ select
   count(*) filter (where ap.lead_id is not null)      as lead_con_appuntamento,
   coalesce(sum(ap.n_app), 0)                          as appuntamenti,
   count(*) filter (where ap.has_show)                 as presenze,
-  count(*) filter (where ap.has_vendita)               as vendite,
+  count(*) filter (where ap.has_vendita)              as vendite,
   coalesce(sum(ap.ricavo), 0)                         as ricavo,
   coalesce(sum(ap.potenziale), 0)                     as potenziale,
-  count(*) filter (where e.is_risposta)                as risposte
+  count(*) filter (where coalesce(es.is_answered, false)) as risposte
 from public.mkt_leads m
 left join app_per_lead ap on ap.lead_id = m.notion_id
-left join public.mkt_esiti e on e.esito = m.esito
+left join lateral (
+  select ca.deal_status_id from public.calls ca
+  where ca.campaign_contact_id = m.crm4_lead_id
+  order by ca.start_date desc limit 1
+) uc on true
+left join public.esiti es on es.deal_status_id = uc.deal_status_id
 group by m.centro_id, 2, m.ad_account, m.campaign_id, m.adset_id, m.ad_id;
 
+-- ⚠️ PERFORMANCE: il ramo "spesa FB senza lead" verificava l'assenza con
+-- `not exists (select 1 from agg_mkt_ad_giorno ...)`, che costringe a
+-- MATERIALIZZARE l'intera aggregazione (58k lead) anche quando la query filtra
+-- un solo centro e un mese. Con la LATERAL su calls dentro la vista, quel ramo
+-- passava da ~600ms a 2,3s. La condizione equivalente si esprime direttamente su
+-- mkt_leads (stesso insieme di coppie ad_id×giorno) e usa mkt_leads_ad_idx.
+-- Query del drill-down misurata: 2.296ms → 305ms.
 create or replace view public.v_drilldown_ad with (security_invoker = on) as
 select g.centro_id, g.giorno, g.ad_account, g.campaign_id, g.campaign_name,
        g.adset_id, g.adset_name, g.ad_id, g.ad_name,
@@ -86,12 +83,12 @@ from public.fb_insights_ad f
 left join public.fb_account_map m on m.ad_account_id = f.ad_account_id
 left join public.fb_campaign_attr_giorno a
        on a.campaign_id = f.campaign_id and a.giorno = f.giorno
-where not exists (select 1 from public.agg_mkt_ad_giorno g
-                   where g.ad_id = f.ad_id and g.giorno = f.giorno)
+where not exists (select 1 from public.mkt_leads ml
+                   where ml.ad_id = f.ad_id
+                     and (ml.creazione at time zone 'Europe/Rome')::date = f.giorno)
   and (f.campaign_id is null
    or f.campaign_id not in (select campaign_id from public.fb_campaign_class where is_sv = false))
   and coalesce(a.centro_id, m.centro_id) is not null;
 
--- Nota: 13 righe ad×giorno su ~migliaia hanno risposte < lead_con_appuntamento
--- (esito riscritto a "MAI RISPOSTO" su un lead che aveva gia' un appuntamento).
--- A livello di centro l'incoerenza si annulla; il funnel mostra i numeri reali.
+-- Verifica: WEIGHT INSTITUTE luglio = 73 lead → 54 risposte (74%) → 35 app
+-- → 20 presenze → 11 vendite.
