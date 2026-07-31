@@ -51,7 +51,8 @@ function lunediDi(iso) {
 }
 const minutiDi = hhmm => +String(hhmm).slice(0, 2) * 60 + +String(hhmm).slice(3, 5);
 const inizioMin = t => minutiDi(t.ora_inizio);
-const fineMin = t => t.ora_fine ? minutiDi(t.ora_fine) : inizioMin(t) + (t.minuti || 30);
+// non esiste un'ora di fine: la fine è inizio + durata (30′ se non indicata)
+const fineMin = t => inizioMin(t) + (t.minuti || 30);
 const coloreDi = id => {
   const i = GENTE.findIndex(p => p.id === id);
   return PALETTE[(i < 0 ? 0 : i) % PALETTE.length];
@@ -105,7 +106,7 @@ const tutteSpuntate = () => GENTE.every(p => selezione.has(p.id));
 function rigaTask(t) {
   const ora = oraBreve(t.ora_inizio);
   const quando = tab === 'oggi'
-    ? (ora ? `<b>${ora}</b>${t.ora_fine ? '<small>–' + oraBreve(t.ora_fine) + '</small>' : ''}` : '<span class="tk-noora">—</span>')
+    ? (ora ? `<b>${ora}</b>` : '<span class="tk-noora">—</span>')
     : `<b>${dataBreve(t.data)}</b>${ora ? '<small>' + ora + '</small>' : ''}`;
   const chip = (cls, testo) => `<span class="tk-chip ${cls}">${esc(testo)}</span>`;
   const meta = [
@@ -302,8 +303,7 @@ function disegnaPannello() {
   const seg = (nome, opzioni, val) => `<div class="tk-seg">${opzioni.map(([k, l]) =>
     `<button data-${nome}="${k}" class="${val === k ? 'sel' : ''}">${l}</button>`).join('')}</div>`;
   const riga = (k, v) => `<div class="tk-dett"><span>${k}</span><span>${v}</span></div>`;
-  const orario = oraBreve(t.ora_inizio)
-    ? oraBreve(t.ora_inizio) + (t.ora_fine ? '–' + oraBreve(t.ora_fine) : '') : '—';
+  const orario = oraBreve(t.ora_inizio) || '—';
   const puoEliminare = t.creata_da === ME.id || t.assegnata_a === ME.id;
 
   box.innerHTML = `
@@ -325,7 +325,8 @@ function disegnaPannello() {
         ${riga('Assegnata a', esc(t.assegnato_nome))}
         ${riga('Tipo attività', esc(t.categoria))}
         ${riga('Data', t.data.split('-').reverse().join('/'))}
-        ${riga('Orario', orario + (t.minuti ? ' · ' + t.minuti + '′' : ''))}
+        ${riga('Ora', orario)}
+        ${riga('Durata', t.minuti ? t.minuti + ' min' : '—')}
         ${riga('Centro', esc(t.centro_nome || '—'))}
         ${riga('Creata da', esc(t.creatore_nome))}
         ${t.descrizione ? `<div class="tk-descr">${esc(t.descrizione)}</div>` : ''}
@@ -426,7 +427,6 @@ async function elimina(id) {
 function apriForm(t, pre) {
   pre = pre || {};
   const box = _mount.querySelector('#tkForm');
-  const oraFine = pre.ora ? String(+pre.ora.slice(0, 2) + 1).padStart(2, '0') + ':00' : '';
   const opt = (v, l, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(l)}</option>`;
   const persone = PERSONE.map(p => opt(p.user_id, p.user_id === ME.id ? p.nome + ' (io)' : p.nome,
     t ? t.assegnata_a === p.user_id : p.user_id === ME.id)).join('');
@@ -448,10 +448,9 @@ function apriForm(t, pre) {
       <label class="tk-campo">Tipo attività<select id="fCat">${cat}</select></label>
       <label class="tk-campo tk-largo">Centro (facoltativo)<select id="fCentro">${centri}</select></label>
       <label class="tk-campo">Data<input type="date" id="fData" value="${t ? t.data : (pre.data || OGGI())}"></label>
-      <label class="tk-campo">Minuti<input type="number" id="fMin" min="1" max="1440" step="5"
-             value="${t && t.minuti ? t.minuti : ''}" placeholder="30"></label>
-      <label class="tk-campo">Inizio<input type="time" id="fIni" value="${t ? oraBreve(t.ora_inizio) : (pre.ora || '')}"></label>
-      <label class="tk-campo">Fine<input type="time" id="fFin" value="${t ? oraBreve(t.ora_fine) : oraFine}"></label>
+      <label class="tk-campo">Ora<input type="time" id="fIni" value="${t ? oraBreve(t.ora_inizio) : (pre.ora || '')}"></label>
+      <label class="tk-campo tk-largo">Durata (minuti)<input type="number" id="fMin" min="1" max="1440" step="5"
+             value="${t && t.minuti ? t.minuti : (pre.ora ? 60 : '')}" placeholder="30"></label>
       <label class="tk-campo tk-largo">Note iniziali (facoltative)
         <textarea id="fDescr" rows="2" placeholder="Contesto, link, cosa serve">${t && t.descrizione ? esc(t.descrizione) : ''}</textarea></label>
     </div>
@@ -476,19 +475,13 @@ async function salvaForm(t, chiudi) {
   const titolo = v('fTitolo').trim();
   if (!titolo) { messaggio('#tkFormMsg', 'Serve un titolo.', false); return; }
 
-  const ini = v('fIni') || null, fin = v('fFin') || null;
-  let minuti = v('fMin') ? +v('fMin') : null;
-  if (!minuti && ini && fin) {                       // durata dedotta dagli orari
-    const m = (a) => +a.slice(0, 2) * 60 + +a.slice(3, 5);
-    const d = m(fin) - m(ini);
-    if (d > 0) minuti = d;
-  }
   const riga = {
     titolo,
     assegnata_a: v('fAss'),
     centro_id: v('fCentro') || null,
     data: v('fData') || OGGI(),
-    ora_inizio: ini, ora_fine: fin, minuti,
+    ora_inizio: v('fIni') || null,
+    minuti: v('fMin') ? +v('fMin') : null,
     categoria: v('fCat'),
     descrizione: v('fDescr').trim() || null,
   };
