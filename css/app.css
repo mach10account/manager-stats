@@ -486,17 +486,19 @@ footer { color: var(--muted); font-size: 11px; text-align: center; margin: 26px 
 /* ------------------------------------------------ funnel (dettaglio centro) */
 
 :root {
-  --funnel-1: #9cc2f1;
-  --funnel-2: #6ba3e8;
-  --funnel-3: #3f86dd;
-  --funnel-4: #2270d8;
+  --funnel-1: #a8c8f2;
+  --funnel-2: #85b0ec;
+  --funnel-3: #5f97e4;
+  --funnel-4: #3f80db;
+  --funnel-5: #2270d8;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --funnel-1: #2c5a9e;
-    --funnel-2: #3670bd;
+    --funnel-2: #346cb4;
     --funnel-3: #3d8be8;
-    --funnel-4: #63a8f0;
+    --funnel-4: #52a0ee;
+    --funnel-5: #6bb1f3;
   }
 }
 
@@ -513,6 +515,7 @@ footer { color: var(--muted); font-size: 11px; text-align: center; margin: 26px 
 .f-bar-2 { background: var(--funnel-2); }
 .f-bar-3 { background: var(--funnel-3); }
 .f-bar-4 { background: var(--funnel-4); }
+.f-bar-5 { background: var(--funnel-5); }
 .f-step { font-size: 12px; color: var(--text-secondary); padding: 6px 0; font-variant-numeric: tabular-nums; }
 
 .funnel-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 18px; }

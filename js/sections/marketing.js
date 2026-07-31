@@ -70,9 +70,10 @@ function drawFunnel(mount) {
   const card = mount.querySelector('#mkFunnelCard');
   if (!card) return;
 
-  const tot = { lead: 0, app: 0, presenze: 0, vendite: 0, ricavo: 0, spend: null };
+  const tot = { lead: 0, risposte: 0, app: 0, presenze: 0, vendite: 0, ricavo: 0, spend: null };
   for (const r of _ctx.rows) {
     tot.lead     += (+r.lead || 0);
+    tot.risposte += (+r.risposte || 0);
     tot.app      += (+r.lead_con_appuntamento || 0);
     tot.presenze += (+r.presenze || 0);
     tot.vendite  += (+r.vendite || 0);
@@ -82,10 +83,11 @@ function drawFunnel(mount) {
   if (!tot.lead) { card.hidden = true; return; }
 
   const stages = [
-    { nome: 'Lead',          val: tot.lead },
+    { nome: 'Lead',                 val: tot.lead },
+    { nome: 'Risposte',             val: tot.risposte },
     { nome: 'Appuntamento fissato', val: tot.app },
-    { nome: 'Presenze',      val: tot.presenze },
-    { nome: 'Vendite',       val: tot.vendite },
+    { nome: 'Presenze',             val: tot.presenze },
+    { nome: 'Vendite',              val: tot.vendite },
   ];
 
   let html = '';
@@ -107,6 +109,8 @@ function drawFunnel(mount) {
     <div class="f-kpi"><span class="f-kpi-label">${label}</span>
       <span class="f-kpi-val">${val}</span>${sub ? `<span class="f-kpi-sub">${sub}</span>` : ''}</div>`;
   card.querySelector('#mkFunnelKpis').innerHTML =
+    kpi('Tasso di risposta', pctFrac(safeDiv(tot.risposte, tot.lead)),
+        `${fmt(tot.risposte)} lead su ${fmt(tot.lead)}`) +
     kpi('Conversione lead → vendita', pctFrac(safeDiv(tot.vendite, tot.lead))) +
     kpi('Costo per presenza', tot.spend === null || !tot.presenze ? '—' : eur2(tot.spend / tot.presenze),
         tot.spend === null ? 'senza spesa FB' : `${eur(tot.spend)} / ${fmt(tot.presenze)}`) +
@@ -158,7 +162,7 @@ export async function render(mount, params) {
 
   const rows = await fetchAll((lo, hi) =>
     supabase.from('v_drilldown_ad')
-      .select('centro_id,giorno,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,lead,lead_con_appuntamento,appuntamenti,presenze,vendite,ricavo,potenziale,spend')
+      .select('centro_id,giorno,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,lead,risposte,lead_con_appuntamento,appuntamenti,presenze,vendite,ricavo,potenziale,spend')
       .gte('giorno', f.from).lte('giorno', f.to)
       .eq('centro_id', centro)
       .range(lo, hi));
