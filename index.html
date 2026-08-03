@@ -134,6 +134,9 @@
 
 <footer>Salone Vincente · Dati: Notion + CRM4 → Supabase · Dashboard manager</footer>
 
-<script type="module" src="./js/app.js"></script>
+<!-- ?v= da bumpare quando cambia app.js: un reload normale rivalida index.html
+     ma NON i moduli in cache (max-age=600) → senza bump si può restare col
+     bootstrap vecchio che non conosce le rotte nuove. -->
+<script type="module" src="./js/app.js?v=finance1"></script>
 </body>
 </html>
