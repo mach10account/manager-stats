@@ -1,30 +1,32 @@
-// manager-stats · Sezione Finance — dashboard generale (solo admin)
+// manager-stats · Sezione Finance — dashboard generale + gestione costi (solo admin)
 //
-// Fonte: fin_incassi (1 riga = 1 rata, da Notion 🏦 DATABASE INCASSI) e
+// Fonte: fin_incassi (1 riga = 1 rata, da Notion 🏦 DATABASE INCASSI),
 // fin_contratti (1 riga = 1 contratto, da Notion DATABASE VALORE CONTRATTI),
-// sync WF-M7 orario. Le tabelle sono leggibili SOLO dagli admin (RLS ms_puo).
+// fin_costi (voci di costo, EDITABILI qui — modello CFO Cockpit), centri
+// (anagrafica: churn e riempimento team). Sync WF-M7 orario; RLS solo admin.
 //
-// La vista è MENSILE come il CFO Cockpit: la barra filtri globale è nascosta
-// (app.js) e qui c'è un selettore mese dedicato + filtro agenzia.
+// Due tab: Dashboard (vista mensile) e Costi (registro voci per reparto).
+// La barra filtri globale è nascosta (app.js); qui c'è il selettore mese.
 //
-// Definizioni (stesse del prototipo CFO Cockpit, adattate ai dati Notion):
+// Definizioni (dal prototipo CFO Cockpit, adattate ai dati Notion):
 // · Incassato del mese  = somma IMPORTO RATA con DATA INCASSO nel mese
 // · Nuovi clienti       = incassi il cui contratto è stato creato nello stesso mese
 //                         (join via ID CONTRATTO) e non è RINNOVO/UPSELL
-// · Rinnovi / Upsell    = tag esatto 'RINNOVO' / 'UPSELL' in TIPO DI CONTRATTO
-//                         (⚠️ match sull'elemento, non substring: esiste anche
-//                         "CONTRATTO TERMINATO CON RINNOVO" che NON è un rinnovo)
+// · Rinnovi / Upsell    = tag esatto 'RINNOVO' / 'UPSELL' (match sull'elemento:
+//                         "CONTRATTO TERMINATO CON RINNOVO" NON è un rinnovo)
 // · Contrattualizzato   = somma VALORE CONTRATTO dei contratti creati nel mese
-// · Rate da incassare   = rate con scadenza nel mese e non ancora incassate
-// · Insolute (>7gg)     = rate scadute da oltre 7 giorni e mai incassate,
-//                         cumulate su tutte le mensilità fino al mese selezionato
+// · Insolute (>7gg)     = rate scadute da oltre 7 giorni e mai incassate
+// · Commissioni (auto)  = somma delle formule commissione Notion sugli incassi
+//                         del mese (venditore 10% · setter 5% · PM/MB/BS su rinnovi)
+// · Ricorrenza costi    = mensile (da `data` in poi, fino a `fine`), annua
+//                         (stesso mese dell'anno), una tantum (solo quel mese)
 import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
-import { renderTable, renderKpiGroups } from '../tables.js';
+import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
 import { renderLineChart } from '../charts.js';
 import { fmt, eur, pct, fmtPct, pctFrac, safeDiv, dstr, todayRome, esc } from '../format.js';
 
-let DATA = null;          // { incassi, contratti } grezzi (già filtrati dalla RLS)
+let DATA = null;          // { incassi, contratti, centri, costi }
 let _mount = null;
 let _renderId = 0;
 
@@ -37,29 +39,36 @@ const addYm = (m, n) => {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 };
 const fineMese = m => dstr(new Date(+m.slice(0, 4), +m.slice(5, 7), 0));
+const dtIt = v => v ? v.split('-').reverse().join('/') : '—';
 
 let MESE = dstr(todayRome()).slice(0, 7);   // default: mese corrente (Europe/Rome)
-let AGENZIA = '';                                    // '' = tutte
+let AGENZIA = '';                            // '' = tutte
+let TAB = 'dash';                            // 'dash' | 'costi'
 let centroSort = { key: 'incassato', dir: -1 };
 let contrattiSort = { key: 'valore', dir: -1 };
 let insSort = { key: 'data_scadenza', dir: 1 };
+const costiSort = {};                        // per reparto
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData() {
-  const [incassi, contratti, centri] = await Promise.all([
+  const [incassi, contratti, centri, costi] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('fin_incassi')
-      .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo')
+      .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo,comm_venditore,comm_setter,comm_pm,comm_mb,comm_bs')
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_contratti')
       .select('nome_centro,id_contratto,valore,stato,durata,agenzia,venditore,creazione_contratto')
       .range(lo, hi)),
-    // anagrafica clienti: serve per churn (DATA CLIENTE PERSO) e riempimento team.
-    // Select dedicato e non loadCentri: colonne diverse e niente cache condivisa.
+    // anagrafica clienti: churn (DATA CLIENTE PERSO) e riempimento team.
     fetchAll((lo, hi) => supabase.from('centri')
       .select('nome,agenzia,stato_attivita,consulente,data_cliente_perso')
       .range(lo, hi)),
+    fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi)),
   ]);
-  return { incassi, contratti, centri };
+  return { incassi, contratti, centri, costi };
+}
+
+async function ricaricaCosti() {
+  DATA.costi = await fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi));
 }
 
 // ── filtri e definizioni ─────────────────────────────────────────────────────
@@ -68,6 +77,7 @@ const inAg = r => !AGENZIA || hasTag(r.agenzia, AGENZIA);
 const incassi = () => DATA.incassi.filter(inAg);
 const contratti = () => DATA.contratti.filter(inAg);
 const centriRows = () => (DATA.centri || []).filter(inAg);
+const costi = () => DATA.costi || [];        // i costi sono aziendali, niente filtro agenzia
 const PERSO_TAG = 'CLIENTE PERSO/SPARITO';
 const isGestito = c => !hasTag(c.stato_attivita, PERSO_TAG);   // come il Cockpit: tutto tranne i persi
 const incassata = r => r.pagato || !!r.data_incasso;   // su Notion coincidono quasi sempre
@@ -148,12 +158,54 @@ function insolute(m) {
   return t;
 }
 
-// ── KPI ──────────────────────────────────────────────────────────────────────
+// ── costi: ricorrenza e commissioni ──────────────────────────────────────────
+const REPARTI = ['Fissi', 'Commerciale', 'Marketing', 'Delivery', 'Extra'];
+const REPARTO_LABEL = { Fissi: 'Costi Fissi', Commerciale: 'Reparto Commerciale', Marketing: 'Marketing', Delivery: 'Delivery', Extra: 'Costi Straordinari' };
+const CAT_COSTI = ['Diretti', 'Operativi', 'Strutturali', 'Asset', 'Investimenti'];
+const CATEGORIE_EXTRA = ['Software', 'Consulenze', 'Viaggi', 'Formazione', 'Marketing', 'Attrezzature', 'Rimborsi', 'Altro'];
+const RUOLI_DELIVERY = ['Project Manager', 'Beauty Specialist', 'Media Buyer', 'Manager / Direzione', 'Social Media Manager', 'Altri ruoli'];
+const FREQ_LABEL = { mensile: 'Mensile', annua: 'Annua', 'una-tantum': 'Una tantum' };
+
+// la voce conta nel mese m? (stessa logica del Cockpit)
+function costOccurs(c, m) {
+  if (!c.attivo) return false;
+  if (c.fine && m > c.fine.slice(0, 7)) return false;
+  const start = (c.data || '').slice(0, 7);
+  if (!start) return false;
+  if (c.frequenza === 'mensile') return start <= m;
+  if (c.frequenza === 'annua') return start <= m && start.slice(5) === m.slice(5);
+  return start === m;   // una tantum
+}
+
+// commissioni reali del mese (formule Notion sugli incassi con DATA INCASSO nel mese)
+function commissioniMese(m) {
+  const t = { vend: 0, sett: 0, mgr: 0, tot: 0 };
+  for (const r of incassi()) {
+    if (ymOf(r.data_incasso) !== m) continue;
+    t.vend += +r.comm_venditore || 0;
+    t.sett += +r.comm_setter || 0;
+    t.mgr += (+r.comm_pm || 0) + (+r.comm_mb || 0) + (+r.comm_bs || 0);
+  }
+  t.tot = t.vend + t.sett + t.mgr;
+  return t;
+}
+
+const sumImporti = list => list.reduce((a, c) => a + (+c.importo || 0), 0);
+
+// totale costi del mese: voci ricorrenti/una-tantum + commissioni auto
+function costiMese(m) {
+  const occ = costi().filter(c => costOccurs(c, m));
+  const rimborsi = sumImporti(occ.filter(c => (c.sottocategoria || '') === 'Rimborsi'));
+  const manuali = sumImporti(occ.filter(c => (c.sottocategoria || '') !== 'Rimborsi'));
+  const comm = commissioniMese(m);
+  return { occ, manuali, rimborsi, comm, tot: manuali + rimborsi + comm.tot };
+}
+
+// ── KPI dashboard ────────────────────────────────────────────────────────────
 function renderKPI() {
   const byId = contrattiById();
   // mese in corso = confronto ad armi pari: il mese prima viene tagliato allo
-  // stesso giorno (1–3 ago vs 1–3 lug), altrimenti a inizio mese il delta
-  // sarebbe sempre un -90% senza senso. Mesi chiusi = mese pieno vs mese pieno.
+  // stesso giorno (1–3 ago vs 1–3 lug). Mesi chiusi = mese pieno vs mese pieno.
   const oggi = dstr(todayRome());
   const maxDay = MESE === oggi.slice(0, 7) ? oggi.slice(8, 10) : null;
   const s = splitIncassato(MESE, byId);
@@ -174,6 +226,11 @@ function renderKPI() {
   const gestiti = centriRows().filter(isGestito);
   const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean)).size;
   const riemp = nPM > 0 ? gestiti.length / (nPM * CAP_PM) : null;
+
+  // costi reali dal registro + commissioni → margine e ROI
+  const cm = costiMese(MESE);
+  const margine = s.tot - cm.tot;
+  const roi = cm.tot > 0 ? margine / cm.tot : null;
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
@@ -212,8 +269,12 @@ function renderKPI() {
         tone: riemp === null ? undefined : (riemp >= 0.95 ? 'bad' : (riemp >= 0.75 ? undefined : 'good')),
         sub: fmt(gestiti.length) + ' aziende gestite ÷ (' + nPM + ' PM × ' + CAP_PM + ' clienti)' },
       { label: 'Aziende gestite', value: fmt(gestiti.length), sub: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
-      { label: 'Costi del mese', value: '—', sub: 'fonte costi non ancora collegata' },
-      { label: 'Margine netto', value: '—', sub: 'incassato − costi − rimborsi: serve la fonte costi' },
+      { label: 'Costi del mese', value: eur(cm.tot),
+        sub: 'voci ' + eur(cm.manuali) + ' + commissioni ' + eur(cm.comm.tot) + (cm.rimborsi > 0 ? ' + rimborsi ' + eur(cm.rimborsi) : '') },
+      { label: 'Margine netto', value: eur(margine), tone: margine >= 0 ? 'good' : 'bad',
+        sub: 'incassato − costi (commissioni incluse)' },
+      { label: 'ROI', value: roi === null ? '—' : pctFrac(roi), tone: roi === null ? undefined : (roi >= 0 ? 'good' : 'bad'),
+        sub: 'margine netto ÷ costi del mese' },
     ] },
   ]);
 }
@@ -237,8 +298,10 @@ function trendRows() {
 }
 
 function renderTrend() {
+  const el = _mount.querySelector('#fnTrend');
+  if (!el) return;
   const { months, rows } = trendRows();
-  renderLineChart(_mount.querySelector('#fnTrend'), months, rows, [
+  renderLineChart(el, months, rows, [
     { key: 'incassato', color: '--series-1', name: 'Incassato' },
     { key: 'contrattualizzato', color: '--series-2', name: 'Contrattualizzato' },
   ], {
@@ -276,8 +339,9 @@ function centroRows() {
 }
 
 function renderCentri() {
-  const rows = centroRows();
   const el = _mount.querySelector('#fnCentri');
+  if (!el) return;
+  const rows = centroRows();
   if (!rows.length) { el.innerHTML = '<div class="status">Nessun incasso nel mese selezionato.</div>'; return; }
   renderTable(el, centroCols, rows, centroSort,
     k => { centroSort = { key: k, dir: centroSort.key === k ? -centroSort.dir : -1 }; renderCentri(); },
@@ -287,7 +351,7 @@ function renderCentri() {
 // ── tabella: contratti firmati nel mese ──────────────────────────────────────
 const contrattiCols = [
   { key: 'nome_centro', label: 'Centro' },
-  { key: 'creazione_contratto', label: 'Firmato il', fmt: v => v ? v.split('-').reverse().join('/') : '—' },
+  { key: 'creazione_contratto', label: 'Firmato il', fmt: dtIt },
   { key: 'valore', label: 'Valore', fmt: eur },
   { key: 'statoTxt', label: 'Tipo / stato', fmt: v => esc(v || '—') },
   { key: 'durataTxt', label: 'Durata (gg)', fmt: v => esc(v || '—') },
@@ -295,10 +359,11 @@ const contrattiCols = [
 ];
 
 function renderContratti() {
+  const el = _mount.querySelector('#fnContratti');
+  if (!el) return;
   const rows = contratti()
     .filter(c => ymOf(c.creazione_contratto) === MESE)
     .map(c => ({ ...c, statoTxt: (c.stato || []).join(' · '), durataTxt: (c.durata || []).join(' · ') }));
-  const el = _mount.querySelector('#fnContratti');
   if (!rows.length) { el.innerHTML = '<div class="status">Nessun contratto creato nel mese selezionato.</div>'; return; }
   renderTable(el, contrattiCols, rows, contrattiSort,
     k => { contrattiSort = { key: k, dir: contrattiSort.key === k ? -contrattiSort.dir : -1 }; renderContratti(); },
@@ -309,7 +374,7 @@ function renderContratti() {
 const giorniRitardo = iso => Math.floor((todayRome() - new Date(iso + 'T00:00:00')) / 86400000);
 const insCols = [
   { key: 'centro', label: 'Centro', fmt: v => esc(v || '—') },
-  { key: 'data_scadenza', label: 'Scadenza', fmt: v => v ? v.split('-').reverse().join('/') : '—' },
+  { key: 'data_scadenza', label: 'Scadenza', fmt: dtIt },
   { key: 'ritardo', label: 'Ritardo', fmt: v => fmt(v) + ' gg' },
   { key: 'importo', label: 'Importo', fmt: eur },
   { key: 'rata_numero', label: 'Rata n°', fmt: v => v === null || v === undefined ? '—' : fmt(v) },
@@ -318,19 +383,258 @@ const insCols = [
 ];
 
 function renderInsolute() {
-  const rows = insolute(MESE).righe.map(r => ({ ...r, ritardo: giorniRitardo(r.data_scadenza) }));
   const el = _mount.querySelector('#fnInsolute');
+  if (!el) return;
+  const rows = insolute(MESE).righe.map(r => ({ ...r, ritardo: giorniRitardo(r.data_scadenza) }));
   if (!rows.length) { el.innerHTML = '<div class="status">Nessuna rata scaduta e non incassata. 🎉</div>'; return; }
   renderTable(el, insCols, rows, insSort,
     k => { insSort = { key: k, dir: insSort.key === k ? -insSort.dir : -1 }; renderInsolute(); });
 }
 
-// ── barra mese + agenzia ─────────────────────────────────────────────────────
+// ── tab Dashboard ────────────────────────────────────────────────────────────
+const DASH_HTML = `
+  <div class="kpi-groups" id="fnKpi"></div>
+
+  <div class="card">
+    <h2>Andamento mensile</h2>
+    <div class="subtitle">Ultimi 12 mesi fino a <span id="fnMeseLabel"></span>: incassato (per data incasso)
+      e contrattualizzato (per data di creazione del contratto).</div>
+    <div class="legend">
+      <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Incassato</span>
+      <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Contrattualizzato</span>
+    </div>
+    <div class="chart-wrap"><svg id="fnTrend" width="100%" height="280"></svg></div>
+  </div>
+
+  <div class="card">
+    <h2>Incassi del mese per centro</h2>
+    <div class="subtitle">Rate incassate nel mese selezionato (per data incasso) e, per gli stessi centri,
+      le rate in scadenza nel mese non ancora incassate.</div>
+    <div class="table-scroll"><table id="fnCentri"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Contratti firmati nel mese</h2>
+    <div class="subtitle">Dal DATABASE VALORE CONTRATTI, per data di creazione del contratto.</div>
+    <div class="table-scroll"><table id="fnContratti"></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Rate scadute e non incassate</h2>
+    <div class="subtitle">Tutte le rate scadute da <strong>oltre 7 giorni</strong> e mai incassate,
+      fino alla fine del mese selezionato: è la lista da lavorare per recuperare gli insoluti.</div>
+    <div class="table-scroll"><table id="fnInsolute"></table></div>
+  </div>`;
+
+function renderDash() {
+  _mount.querySelector('#fnContent').innerHTML = DASH_HTML;
+  const lab = _mount.querySelector('#fnMeseLabel');
+  if (lab) lab.textContent = ymLabel(MESE);
+  renderKPI();
+  renderTrend();
+  renderCentri();
+  renderContratti();
+  renderInsolute();
+}
+
+// ── tab Costi ────────────────────────────────────────────────────────────────
+const costoCols = rep => {
+  const cols = [{ key: 'descrizione', label: 'Voce' }];
+  if (rep === 'Delivery') cols.push({ key: 'ruolo', label: 'Ruolo', fmt: v => esc(v || 'Altri ruoli') });
+  else cols.push({ key: 'sottocategoria', label: rep === 'Extra' ? 'Categoria' : 'Sottocategoria', fmt: v => esc(v || '—') });
+  if (rep === 'Extra') cols.push({ key: 'data', label: 'Data', fmt: dtIt });
+  cols.push(
+    { key: 'importo', label: rep === 'Extra' ? 'Importo' : '€/mese', fmt: eur },
+    { key: 'frequenza', label: 'Frequenza', fmt: v => FREQ_LABEL[v] || v },
+    { key: 'note', label: 'Note', fmt: v => esc(v || '') },
+  );
+  return cols;
+};
+
+function renderCostiPage() {
+  const content = _mount.querySelector('#fnContent');
+  const cm = costiMese(MESE);
+  const byRep = r => cm.occ.filter(x => (x.reparto || 'Fissi') === r);
+  const totRep = {};
+  for (const r of REPARTI) totRep[r] = sumImporti(byRep(r));
+  totRep.Commerciale += cm.comm.tot;
+  const totale = REPARTI.reduce((a, r) => a + totRep[r], 0);
+  const spente = costi().filter(x => !x.attivo);
+
+  const subRep = {
+    Fissi: byRep('Fissi').length + ' voci ricorrenti (software, uffici, struttura)',
+    Commerciale: byRep('Commerciale').length + ' voci + commissioni automatiche dal venduto',
+    Marketing: 'campagne e spese marketing (l’ad spend di SV non è ancora collegato)',
+    Delivery: 'il team che eroga il servizio, per funzione',
+    Extra: 'spese una tantum del mese (consulenze, viaggi, formazione, rimborsi…)',
+  };
+
+  content.innerHTML = `
+    <div class="kpi-row" id="fnCostiKpi"></div>
+    <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="margin-right:auto">
+        <h2 style="margin-bottom:2px">Totale costi — ${ymLabel(MESE)}</h2>
+        <div class="subtitle" style="margin-bottom:0">fissi + commerciale (commissioni incluse) + marketing + delivery + straordinari${cm.rimborsi > 0 ? ' — inclusi ' + eur(cm.rimborsi) + ' di rimborsi' : ''}</div>
+      </div>
+      <div style="font-size:28px;font-weight:700">${eur(totale)}</div>
+    </div>
+    ${REPARTI.map(r => `
+    <div class="card">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <h2 style="margin-right:auto">${REPARTO_LABEL[r]} · ${eur(totRep[r])}</h2>
+        <button class="tk-btn tk-btn-pri" data-nuovo="${r}">+ Voce</button>
+      </div>
+      <div class="subtitle">${subRep[r]}</div>
+      ${r === 'Commerciale' ? `<div class="subtitle" id="fnCommAuto"></div>` : ''}
+      <div class="table-scroll"><table id="fnRep${r}"></table></div>
+    </div>`).join('')}
+    <div class="card">
+      <h2>Voci disattivate</h2>
+      <div class="subtitle">Storicizzate o da attivare (le voci DEMO del prototipo nascono qui):
+        clicca per modificarle e rimetterle in gioco.</div>
+      <div class="table-scroll"><table id="fnRepSpente"></table></div>
+    </div>`;
+
+  renderKpiRow(_mount.querySelector('#fnCostiKpi'), [
+    { label: 'Costi fissi', value: eur(totRep.Fissi) },
+    { label: 'Reparto commerciale', value: eur(totRep.Commerciale), sub: 'di cui commissioni ' + eur(cm.comm.tot) },
+    { label: 'Marketing', value: eur(totRep.Marketing) },
+    { label: 'Delivery', value: eur(totRep.Delivery) },
+    { label: 'Costi straordinari', value: eur(totRep.Extra), sub: 'una tantum del mese' },
+  ]);
+
+  const commEl = _mount.querySelector('#fnCommAuto');
+  if (commEl) commEl.innerHTML = `<strong>Commissioni vendita (auto)</strong>: ${eur(cm.comm.tot)}
+    — venditori ${eur(cm.comm.vend)} · setter ${eur(cm.comm.sett)} · PM/MB/BS ${eur(cm.comm.mgr)}
+    · calcolate dalle formule Notion sugli incassi del mese`;
+
+  for (const r of REPARTI) {
+    const el = _mount.querySelector('#fnRep' + r);
+    const rows = byRep(r);
+    if (!rows.length) { el.innerHTML = '<div class="status">Nessuna voce' + (r === 'Extra' ? ' nel mese ✓' : '') + '</div>'; continue; }
+    if (!costiSort[r]) costiSort[r] = { key: 'importo', dir: -1 };
+    renderTable(el, costoCols(r), rows, costiSort[r],
+      k => { costiSort[r] = { key: k, dir: costiSort[r].key === k ? -costiSort[r].dir : -1 }; renderCostiPage(); },
+      { onRowClick: row => apriFormCosto(row), rowLink: () => true });
+  }
+
+  const elSp = _mount.querySelector('#fnRepSpente');
+  if (!spente.length) elSp.innerHTML = '<div class="status">Nessuna voce disattivata.</div>';
+  else {
+    renderTable(elSp, [
+      { key: 'descrizione', label: 'Voce' },
+      { key: 'reparto', label: 'Reparto' },
+      { key: 'importo', label: 'Importo', fmt: eur },
+      { key: 'frequenza', label: 'Frequenza', fmt: v => FREQ_LABEL[v] || v },
+      { key: 'note', label: 'Note', fmt: v => esc(v || '') },
+    ], spente, { key: 'importo', dir: -1 }, () => {},
+      { onRowClick: row => apriFormCosto(row), rowLink: () => true });
+  }
+
+  content.querySelectorAll('button[data-nuovo]').forEach(b =>
+    b.onclick = () => apriFormCosto(null, b.dataset.nuovo));
+}
+
+// ── form voce di costo ───────────────────────────────────────────────────────
+function apriFormCosto(c, repartoDefault) {
+  const box = _mount.querySelector('#fnModal');
+  const rep0 = c ? (c.reparto || 'Fissi') : (repartoDefault || 'Fissi');
+  const opt = (v, l, sel) => `<option value="${esc(v)}"${sel ? ' selected' : ''}>${esc(l)}</option>`;
+
+  box.innerHTML = `<div class="modal-card tk-form-card">
+    <div class="modal-head"><h3>${c ? 'Modifica voce di costo' : 'Nuova voce di costo'}</h3>
+      <button class="modal-close" id="fcX" title="Chiudi">✕</button></div>
+    <div class="modal-sub">Mensile = conta ogni mese dalla data di inizio (fino all'eventuale fine) ·
+      Una tantum = solo nel mese della data.</div>
+    <div class="tk-campi">
+      <label class="tk-campo tk-largo">Descrizione
+        <input type="text" id="fcDescr" maxlength="200" value="${c ? esc(c.descrizione) : ''}" placeholder="Es. Ufficio, Notion, Consulenza legale"></label>
+      <label class="tk-campo">Reparto<select id="fcRep">${REPARTI.map(r => opt(r, r, r === rep0)).join('')}</select></label>
+      <label class="tk-campo" id="fcRuoloWrap">Ruolo / funzione<select id="fcRuolo">${RUOLI_DELIVERY.map(r => opt(r, r, c && c.ruolo === r)).join('')}</select></label>
+      <label class="tk-campo" id="fcSottoSelWrap">Categoria spesa<select id="fcSottoSel">${CATEGORIE_EXTRA.map(x => opt(x, x, c && c.sottocategoria === x)).join('')}</select></label>
+      <label class="tk-campo" id="fcSottoWrap">Sottocategoria<input type="text" id="fcSotto" value="${c ? esc(c.sottocategoria || '') : ''}" placeholder="Software, Personale…"></label>
+      <label class="tk-campo">Importo €<input type="number" id="fcImp" step="0.01" value="${c ? +c.importo : ''}"></label>
+      <label class="tk-campo">Data inizio<input type="date" id="fcData" value="${c ? c.data : dstr(todayRome())}"></label>
+      <label class="tk-campo">Frequenza<select id="fcFreq">${['mensile', 'annua', 'una-tantum'].map(f => opt(f, FREQ_LABEL[f], c ? c.frequenza === f : f === 'mensile')).join('')}</select></label>
+      <label class="tk-campo">Fine (facoltativa)<input type="month" id="fcFine" value="${c && c.fine ? c.fine.slice(0, 7) : ''}"></label>
+      <label class="tk-campo">Categoria P&amp;L<select id="fcCat">${CAT_COSTI.map(x => opt(x, x, c ? c.categoria === x : x === 'Operativi')).join('')}</select></label>
+      <label class="tk-campo">Responsabile<input type="text" id="fcResp" value="${c ? esc(c.responsabile || '') : ''}"></label>
+      <label class="tk-campo tk-largo">Note<input type="text" id="fcNote" value="${c ? esc(c.note || '') : ''}"></label>
+      <label class="tk-campo tk-largo" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="fcAttivo" style="width:16px;height:16px" ${!c || c.attivo ? 'checked' : ''}>
+        Attiva (deseleziona per storicizzare senza cancellare)</label>
+    </div>
+    <div class="tk-azioni tk-azioni-form">
+      <span class="tk-msg" id="fcMsg"></span>
+      ${c ? '<button class="tk-btn tk-btn-danger" id="fcElimina">Elimina</button>' : ''}
+      <button class="tk-btn tk-btn-ghost" id="fcAnnulla">Annulla</button>
+      <button class="tk-btn tk-btn-pri" id="fcSalva">Salva</button>
+    </div>
+  </div>`;
+  box.classList.remove('hidden');
+
+  const q = id => box.querySelector('#' + id);
+  const aggiornaCampi = () => {
+    const rep = q('fcRep').value;
+    q('fcRuoloWrap').style.display = rep === 'Delivery' ? '' : 'none';
+    q('fcSottoSelWrap').style.display = rep === 'Extra' ? '' : 'none';
+    q('fcSottoWrap').style.display = (rep === 'Delivery' || rep === 'Extra') ? 'none' : '';
+  };
+  aggiornaCampi();
+  q('fcRep').onchange = aggiornaCampi;
+  q('fcDescr').focus();
+
+  const chiudi = () => { box.classList.add('hidden'); box.innerHTML = ''; };
+  q('fcX').onclick = chiudi;
+  q('fcAnnulla').onclick = chiudi;
+  box.onclick = e => { if (e.target === box) chiudi(); };
+
+  q('fcSalva').onclick = async () => {
+    const descr = q('fcDescr').value.trim();
+    if (!descr) { q('fcMsg').textContent = 'Serve una descrizione.'; return; }
+    if (!q('fcData').value) { q('fcMsg').textContent = 'Serve la data di inizio.'; return; }
+    const rep = q('fcRep').value;
+    const riga = {
+      descrizione: descr,
+      reparto: rep,
+      ruolo: rep === 'Delivery' ? q('fcRuolo').value : null,
+      sottocategoria: rep === 'Extra' ? q('fcSottoSel').value : (rep === 'Delivery' ? ('Personale: ' + q('fcRuolo').value) : (q('fcSotto').value.trim() || null)),
+      categoria: q('fcCat').value,
+      importo: +q('fcImp').value || 0,
+      data: q('fcData').value,
+      fine: q('fcFine').value ? q('fcFine').value + '-01' : null,
+      frequenza: q('fcFreq').value,
+      responsabile: q('fcResp').value.trim() || null,
+      note: q('fcNote').value.trim() || null,
+      attivo: q('fcAttivo').checked,
+      aggiornato_a: new Date().toISOString(),
+    };
+    q('fcSalva').disabled = true;
+    const { error } = c
+      ? await supabase.from('fin_costi').update(riga).eq('id', c.id)
+      : await supabase.from('fin_costi').insert(riga);
+    q('fcSalva').disabled = false;
+    if (error) { q('fcMsg').textContent = error.message; return; }
+    chiudi();
+    await ricaricaCosti();
+    renderAll();
+  };
+
+  const del = q('fcElimina');
+  if (del) del.onclick = async () => {
+    if (!confirm('Eliminare definitivamente questa voce? Consiglio: disattivala invece, per mantenere lo storico.')) return;
+    const { error } = await supabase.from('fin_costi').delete().eq('id', c.id);
+    if (error) { q('fcMsg').textContent = error.message; return; }
+    chiudi();
+    await ricaricaCosti();
+    renderAll();
+  };
+}
+
+// ── barra mese + agenzia + tab ───────────────────────────────────────────────
 function renderBar() {
   const mi = _mount.querySelector('#fnMese');
   if (mi) mi.value = MESE;
-  const lab = _mount.querySelector('#fnMeseLabel');
-  if (lab) lab.textContent = ymLabel(MESE);
   const chips = _mount.querySelector('#fnAgChips');
   const ags = agenzie();
   const wrap = _mount.querySelector('#fnAgWrap');
@@ -340,15 +644,14 @@ function renderBar() {
       `<button data-ag="${esc(a)}" class="${AGENZIA === a ? 'active' : ''}">${a === '' ? 'Tutte' : esc(a)}</button>`).join('');
     chips.querySelectorAll('button').forEach(b => b.onclick = () => { AGENZIA = b.dataset.ag; renderAll(); });
   }
+  _mount.querySelectorAll('#fnTabs button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === TAB));
 }
 
 function renderAll() {
   renderBar();
-  renderKPI();
-  renderTrend();
-  renderCentri();
-  renderContratti();
-  renderInsolute();
+  if (TAB === 'costi') renderCostiPage();
+  else renderDash();
 }
 
 // ── ciclo di rendering ───────────────────────────────────────────────────────
@@ -377,56 +680,35 @@ async function load() {
   }
 }
 
-export async function render(mount) {
+export async function render(mount, params) {
   _mount = mount;
   _renderId++;
+  TAB = params && params.get && params.get('tab') === 'costi' ? 'costi' : 'dash';
   mount.innerHTML = `
-    <div class="filters" style="margin-bottom:14px">
+    <div class="filters" style="margin-bottom:8px">
       <span class="filter-cap">Mese</span>
       <button id="fnPrev" title="Mese precedente">‹</button>
       <input type="month" id="fnMese">
       <button id="fnNext" title="Mese successivo">›</button>
       <span id="fnAgWrap" class="hidden"><span class="filter-cap">Agenzia</span><span id="fnAgChips"></span></span>
     </div>
+    <div class="lead-tabs" id="fnTabs" style="margin-bottom:12px">
+      <button data-tab="dash">Dashboard</button>
+      <button data-tab="costi">Costi</button>
+    </div>
     <div id="fnStatus" class="status loading">Caricamento dati…</div>
-    <div id="fnContent" class="hidden">
-      <div class="kpi-groups" id="fnKpi"></div>
-
-      <div class="card">
-        <h2>Andamento mensile</h2>
-        <div class="subtitle">Ultimi 12 mesi fino a <span id="fnMeseLabel"></span>: incassato (per data incasso)
-          e contrattualizzato (per data di creazione del contratto).</div>
-        <div class="legend">
-          <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Incassato</span>
-          <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Contrattualizzato</span>
-        </div>
-        <div class="chart-wrap"><svg id="fnTrend" width="100%" height="280"></svg></div>
-      </div>
-
-      <div class="card">
-        <h2>Incassi del mese per centro</h2>
-        <div class="subtitle">Rate incassate nel mese selezionato (per data incasso) e, per gli stessi centri,
-          le rate in scadenza nel mese non ancora incassate.</div>
-        <div class="table-scroll"><table id="fnCentri"></table></div>
-      </div>
-
-      <div class="card">
-        <h2>Contratti firmati nel mese</h2>
-        <div class="subtitle">Dal DATABASE VALORE CONTRATTI, per data di creazione del contratto.</div>
-        <div class="table-scroll"><table id="fnContratti"></table></div>
-      </div>
-
-      <div class="card">
-        <h2>Rate scadute e non incassate</h2>
-        <div class="subtitle">Tutte le rate scadute da <strong>oltre 7 giorni</strong> e mai incassate,
-          fino alla fine del mese selezionato: è la lista da lavorare per recuperare gli insoluti.</div>
-        <div class="table-scroll"><table id="fnInsolute"></table></div>
-      </div>
-    </div>`;
+    <div id="fnContent" class="hidden"></div>
+    <div id="fnModal" class="modal-overlay hidden"></div>`;
 
   mount.querySelector('#fnPrev').onclick = () => { MESE = addYm(MESE, -1); if (DATA) renderAll(); };
   mount.querySelector('#fnNext').onclick = () => { MESE = addYm(MESE, 1); if (DATA) renderAll(); };
   mount.querySelector('#fnMese').onchange = e => { if (e.target.value) { MESE = e.target.value; if (DATA) renderAll(); } };
+  mount.querySelectorAll('#fnTabs button').forEach(b => b.onclick = () => {
+    TAB = b.dataset.tab;
+    // il tab resta nell'URL (refresh e link diretti), senza rifare la history
+    history.replaceState(null, '', '#/finance' + (TAB === 'costi' ? '?tab=costi' : ''));
+    if (DATA) renderAll();
+  });
 
   await load();
 }
