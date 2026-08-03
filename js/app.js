@@ -11,6 +11,7 @@ import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';
 import * as vendita from './sections/vendita.js';
+import * as finance from './sections/finance.js';
 import * as accessi from './sections/accessi.js';
 import * as task from './sections/task.js';
 
@@ -21,6 +22,7 @@ const sections = {
   '/coorti': coorti,
   '/beauty': beauty,
   '/vendita': vendita,
+  '/finance': finance,
   '/task': task,
   '/accessi': accessi,
 };
@@ -32,6 +34,7 @@ const permessoDi = {
   '/coorti': 'coorti',
   '/beauty': 'beauty',
   '/vendita': 'vendita',
+  '/finance': 'finance',        // 'finance' non si assegna dal pannello Accessi: di fatto solo admin
   '/task': 'task',              // 'task' non si assegna: ms_mie_sezioni() la dà a ogni utente attivo
   '/accessi': 'admin',
 };
@@ -140,8 +143,9 @@ function renderCurrent() {
     path === '/vendita' || !filtroConsulenteUtile());
   // in Task i filtri in alto non servono: le tab (arretrate/oggi/prossime) sono
   // il filtro, e un preset "7 giorni" nasconderebbe le task arretrate.
+  // In Finance la vista è mensile: il selettore mese sta dentro la sezione.
   const filterBar = $('filterBar');
-  if (filterBar) filterBar.classList.toggle('hidden', path === '/task');
+  if (filterBar) filterBar.classList.toggle('hidden', path === '/task' || path === '/finance');
   mount.innerHTML = '<div class="status loading">Caricamento…</div>';
   Promise.resolve()
     .then(() => sections[path].render(mount, route.params))
