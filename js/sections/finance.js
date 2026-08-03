@@ -1,14 +1,14 @@
-// manager-stats · Sezione Finance — dashboard generale + gestione costi (solo admin)
+// manager-stats · Sezione Finance (solo admin) — porting del prototipo CFO Cockpit
 //
-// Fonte: fin_incassi (1 riga = 1 rata, da Notion 🏦 DATABASE INCASSI),
-// fin_contratti (1 riga = 1 contratto, da Notion DATABASE VALORE CONTRATTI),
-// fin_costi (voci di costo, EDITABILI qui — modello CFO Cockpit), centri
-// (anagrafica: churn e riempimento team). Sync WF-M7 orario; RLS solo admin.
+// Fonti: fin_incassi (1 riga = 1 rata, da Notion 🏦 DATABASE INCASSI),
+// fin_contratti (1 riga = 1 contratto, da DATABASE VALORE CONTRATTI),
+// fin_costi (voci di costo, EDITABILI qui), centri (anagrafica clienti:
+// churn, ciclo di vita, PM e beauty). Sync WF-M7/WF-M1; RLS solo admin.
 //
-// Due tab: Dashboard (vista mensile) e Costi (registro voci per reparto).
+// Tab: Dashboard · Costi · P&L · Delivery · Clienti & LTV · Report.
 // La barra filtri globale è nascosta (app.js); qui c'è il selettore mese.
 //
-// Definizioni (dal prototipo CFO Cockpit, adattate ai dati Notion):
+// Definizioni (dal Cockpit, adattate ai dati Notion):
 // · Incassato del mese  = somma IMPORTO RATA con DATA INCASSO nel mese
 // · Nuovi clienti       = incassi il cui contratto è stato creato nello stesso mese
 //                         (join via ID CONTRATTO) e non è RINNOVO/UPSELL
@@ -16,15 +16,17 @@
 //                         "CONTRATTO TERMINATO CON RINNOVO" NON è un rinnovo)
 // · Contrattualizzato   = somma VALORE CONTRATTO dei contratti creati nel mese
 // · Insolute (>7gg)     = rate scadute da oltre 7 giorni e mai incassate
-// · Commissioni (auto)  = somma delle formule commissione Notion sugli incassi
-//                         del mese (venditore 10% · setter 5% · PM/MB/BS su rinnovi)
+// · Commissioni (auto)  = formule commissione Notion sugli incassi del mese
+//                         (venditore 10% · setter 5% · PM/MB/BS sui rinnovi)
 // · Ricorrenza costi    = mensile (da `data` in poi, fino a `fine`), annua
 //                         (stesso mese dell'anno), una tantum (solo quel mese)
+// · EBITDA              = ricavi netti − costi correnti − commissioni, ESCLUSI
+//                         investimenti e asset · Cash flow = EBITDA − capex
 import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
 import { renderLineChart } from '../charts.js';
-import { fmt, eur, pct, fmtPct, pctFrac, safeDiv, dstr, todayRome, esc } from '../format.js';
+import { fmt, fmt1, eur, pct, fmtPct, pctFrac, safeDiv, dstr, todayRome, esc } from '../format.js';
 
 let DATA = null;          // { incassi, contratti, centri, costi }
 let _mount = null;
@@ -40,13 +42,25 @@ const addYm = (m, n) => {
 };
 const fineMese = m => dstr(new Date(+m.slice(0, 4), +m.slice(5, 7), 0));
 const dtIt = v => v ? v.split('-').reverse().join('/') : '—';
+// mesi pieni fra due date ISO (per durata cliente e LTV)
+const mesiTra = (a, b) => {
+  if (!a || !b) return null;
+  const d = (+b.slice(0, 4) - +a.slice(0, 4)) * 12 + (+b.slice(5, 7) - +a.slice(5, 7));
+  return d + (+b.slice(8, 10) >= +a.slice(8, 10) ? 0 : -1);
+};
 
 let MESE = dstr(todayRome()).slice(0, 7);   // default: mese corrente (Europe/Rome)
 let AGENZIA = '';                            // '' = tutte
-let TAB = 'dash';                            // 'dash' | 'costi'
+let TAB = 'dash';
+const TABS = [
+  ['dash', 'Dashboard'], ['costi', 'Costi'], ['pnl', 'P&L'],
+  ['delivery', 'Delivery'], ['clienti', 'Clienti & LTV'], ['report', 'Report'],
+];
 let centroSort = { key: 'incassato', dir: -1 };
 let contrattiSort = { key: 'valore', dir: -1 };
 let insSort = { key: 'data_scadenza', dir: 1 };
+let pmSort = { key: 'gestiti', dir: -1 };
+let ltvSort = { key: 'incassato', dir: -1 };
 const costiSort = {};                        // per reparto
 
 // ── caricamento ──────────────────────────────────────────────────────────────
@@ -58,9 +72,8 @@ async function buildData() {
     fetchAll((lo, hi) => supabase.from('fin_contratti')
       .select('nome_centro,id_contratto,valore,stato,durata,agenzia,venditore,creazione_contratto')
       .range(lo, hi)),
-    // anagrafica clienti: churn (DATA CLIENTE PERSO) e riempimento team.
     fetchAll((lo, hi) => supabase.from('centri')
-      .select('nome,agenzia,stato_attivita,consulente,data_cliente_perso')
+      .select('nome,agenzia,stato_attivita,consulente,beauty,data_cliente_perso,inizio_servizio,fine_servizio,data_rinnovo')
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi)),
   ]);
@@ -82,6 +95,9 @@ const PERSO_TAG = 'CLIENTE PERSO/SPARITO';
 const isGestito = c => !hasTag(c.stato_attivita, PERSO_TAG);   // come il Cockpit: tutto tranne i persi
 const incassata = r => r.pagato || !!r.data_incasso;   // su Notion coincidono quasi sempre
 const ymOf = d => d ? d.slice(0, 7) : null;
+// i nomi centro arrivano da due fonti diverse (incassi/contratti vs anagrafica):
+// il join è per nome normalizzato, l'unica chiave in comune.
+const chiave = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 function agenzie() {
   const s = new Set();
@@ -93,6 +109,12 @@ function agenzie() {
 function contrattiById() {
   const m = new Map();
   for (const c of DATA.contratti) if (c.id_contratto && !m.has(c.id_contratto)) m.set(c.id_contratto, c);
+  return m;
+}
+
+function centriByNome() {
+  const m = new Map();
+  for (const c of centriRows()) if (c.nome) m.set(chiave(c.nome), c);
   return m;
 }
 
@@ -158,7 +180,7 @@ function insolute(m) {
   return t;
 }
 
-// ── costi: ricorrenza e commissioni ──────────────────────────────────────────
+// ── costi: ricorrenza, commissioni, conto economico ──────────────────────────
 const REPARTI = ['Fissi', 'Commerciale', 'Marketing', 'Delivery', 'Extra'];
 const REPARTO_LABEL = { Fissi: 'Costi Fissi', Commerciale: 'Reparto Commerciale', Marketing: 'Marketing', Delivery: 'Delivery', Extra: 'Costi Straordinari' };
 const CAT_COSTI = ['Diretti', 'Operativi', 'Strutturali', 'Asset', 'Investimenti'];
@@ -194,15 +216,37 @@ const sumImporti = list => list.reduce((a, c) => a + (+c.importo || 0), 0);
 
 // totale costi del mese: voci ricorrenti/una-tantum + commissioni auto.
 // capex = voci con categoria P&L Asset/Investimenti: contano nel totale costi
-// (e nel margine netto) ma NON nell'EBITDA.
+// (e nel cash flow) ma NON nell'EBITDA.
 function costiMese(m) {
   const occ = costi().filter(c => costOccurs(c, m));
   const rimborsi = sumImporti(occ.filter(c => (c.sottocategoria || '') === 'Rimborsi'));
   const voci = occ.filter(c => (c.sottocategoria || '') !== 'Rimborsi');
   const manuali = sumImporti(voci);
-  const capex = sumImporti(voci.filter(c => c.categoria === 'Asset' || c.categoria === 'Investimenti'));
+  const cat = {};
+  for (const k of CAT_COSTI) cat[k] = sumImporti(voci.filter(c => c.categoria === k));
+  const capex = cat.Asset + cat.Investimenti;
   const comm = commissioniMese(m);
-  return { occ, manuali, capex, rimborsi, comm, tot: manuali + rimborsi + comm.tot };
+  return { occ, voci, manuali, cat, capex, rimborsi, comm, tot: manuali + rimborsi + comm.tot };
+}
+
+// conto economico per cassa del mese
+function pnl(m) {
+  const byId = contrattiById();
+  const s = splitIncassato(m, byId);
+  const cm = costiMese(m);
+  const ricaviNetti = s.tot - cm.rimborsi;
+  const costiDiretti = cm.comm.tot + cm.cat.Diretti;
+  const margineLordo = ricaviNetti - costiDiretti;
+  const margineOp = margineLordo - cm.cat.Operativi;
+  const ebitda = margineOp - cm.cat.Strutturali;
+  const cashFlow = ebitda - cm.capex;
+  return {
+    m, s, cm, lordi: s.tot, rimborsi: cm.rimborsi, ricaviNetti, costiDiretti, margineLordo,
+    margineOp, ebitda, cashFlow, contrattualizzato: contrattualizzato(m).tot,
+    pctLordo: ricaviNetti > 0 ? margineLordo / ricaviNetti : null,
+    pctOp: ricaviNetti > 0 ? margineOp / ricaviNetti : null,
+    pctEbitda: ricaviNetti > 0 ? ebitda / ricaviNetti : null,
+  };
 }
 
 // ── KPI dashboard ────────────────────────────────────────────────────────────
@@ -231,15 +275,9 @@ function renderKPI() {
   const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean)).size;
   const riemp = nPM > 0 ? gestiti.length / (nPM * CAP_PM) : null;
 
-  // costi reali dal registro + commissioni → margine, EBITDA e ROI.
-  // EBITDA (per cassa): incassato netto − costi correnti − commissioni,
-  // ESCLUSI investimenti/asset (capex); interessi e tasse non sono nel registro.
-  const cm = costiMese(MESE);
-  const margine = s.tot - cm.tot;
-  const roi = cm.tot > 0 ? margine / cm.tot : null;
-  const ricaviNetti = s.tot - cm.rimborsi;
-  const ebitda = ricaviNetti - (cm.manuali - cm.capex) - cm.comm.tot;
-  const pctEbitda = ricaviNetti > 0 ? ebitda / ricaviNetti : null;
+  const p = pnl(MESE);
+  const cm = p.cm;
+  const roi = cm.tot > 0 ? p.cashFlow / cm.tot : null;
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
@@ -280,10 +318,10 @@ function renderKPI() {
       { label: 'Aziende gestite', value: fmt(gestiti.length), sub: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
       { label: 'Costi del mese', value: eur(cm.tot),
         sub: 'voci ' + eur(cm.manuali) + ' + commissioni ' + eur(cm.comm.tot) + (cm.rimborsi > 0 ? ' + rimborsi ' + eur(cm.rimborsi) : '') },
-      { label: 'EBITDA', value: eur(ebitda), tone: ebitda >= 0 ? 'good' : 'bad',
-        sub: (pctEbitda !== null ? pctFrac(pctEbitda) + " dell'incassato netto · " : '')
+      { label: 'EBITDA', value: eur(p.ebitda), tone: p.ebitda >= 0 ? 'good' : 'bad',
+        sub: (p.pctEbitda !== null ? pctFrac(p.pctEbitda) + " dell'incassato netto · " : '')
           + 'esclusi investimenti e asset' + (cm.capex > 0 ? ' (' + eur(cm.capex) + ')' : '') },
-      { label: 'Margine netto', value: eur(margine), tone: margine >= 0 ? 'good' : 'bad',
+      { label: 'Margine netto', value: eur(p.cashFlow), tone: p.cashFlow >= 0 ? 'good' : 'bad',
         sub: 'incassato − tutti i costi del mese, capex e rimborsi inclusi' },
       { label: 'ROI', value: roi === null ? '—' : pctFrac(roi), tone: roi === null ? undefined : (roi >= 0 ? 'good' : 'bad'),
         sub: 'margine netto ÷ costi del mese' },
@@ -643,6 +681,558 @@ function apriFormCosto(c, repartoDefault) {
   };
 }
 
+// ── tab P&L (conto economico per cassa) ──────────────────────────────────────
+function renderPnl() {
+  const d = pnl(MESE);
+  const p = pnl(addYm(MESE, -1));
+  const rn = d.ricaviNetti;
+
+  // riga: etichetta | mese | % ricavi netti | mese prima | Δ
+  // segno = true → è un costo, si mostra in negativo e il Δ va letto al contrario
+  const riga = (label, get, opt = {}) => {
+    const v = get(d), vp = get(p);
+    const f = opt.pct ? (x => x === null ? '—' : pctFrac(x)) : eur;
+    const quota = (!opt.pct && !opt.noQuota && rn > 0) ? pctFrac(Math.abs(v) / rn) : '';
+    let delta = '';
+    if (!opt.noDelta && vp !== null && vp !== 0 && !opt.pct) {
+      const dl = 100 * (v - vp) / Math.abs(vp);
+      const buono = opt.costo ? dl <= 0 : dl >= 0;
+      delta = `<span class="${buono ? 'val-good' : 'val-bad'}">${dl >= 0 ? '+' : ''}${fmt(dl)}%</span>`;
+    }
+    return `<tr class="${opt.cls || ''}">
+      <td class="name"${opt.indent ? ' style="padding-left:26px;color:var(--muted)"' : ''}>${label}</td>
+      <td>${opt.costo && v > 0 ? '−' : ''}${f(v)}</td>
+      <td class="fn-quota">${quota}</td>
+      <td class="fn-quota">${opt.costo && vp > 0 ? '−' : ''}${f(vp)}</td>
+      <td>${delta}</td></tr>`;
+  };
+  const testa = t => `<tr class="fn-head"><td colspan="5">${t}</td></tr>`;
+
+  const cm = d.cm;
+  const persCost = sumImporti(cm.voci.filter(c =>
+    (c.reparto === 'Delivery' || c.reparto === 'Commerciale' ||
+     String(c.sottocategoria || '').toLowerCase().indexOf('personale') !== -1))) + cm.comm.tot;
+  const costoMkt = sumImporti(cm.voci.filter(c => c.reparto === 'Marketing'));
+  const fissi = cm.cat.Operativi + cm.cat.Strutturali;
+  const breakEven = d.pctLordo > 0.05 ? (fissi + cm.rimborsi) / d.pctLordo : null;
+
+  const topCosti = [['Commissioni vendita (auto)', cm.comm.tot]]
+    .concat(cm.occ.filter(c => +c.importo > 0).map(c =>
+      [c.descrizione + (c.sottocategoria ? ' · ' + c.sottocategoria : ''), +c.importo]))
+    .filter(x => x[1] > 0.5).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  const maxCosto = topCosti.length ? topCosti[0][1] : 1;
+
+  _mount.querySelector('#fnContent').innerHTML = `
+    <div class="kpi-row" id="fnPnlKpi"></div>
+
+    <div class="card">
+      <h2>Conto economico (per cassa) — ${ymLabel(MESE)}</h2>
+      <div class="subtitle">Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato).
+        La colonna <strong>% ricavi</strong> è sull'incassato netto; il <strong>Δ</strong> confronta col mese precedente
+        (verde = va nella direzione giusta, anche quando è un costo che scende).</div>
+      <div class="table-scroll"><table class="fn-pnl">
+        <thead><tr><th>Voce</th><th>${ymLabel(MESE)}</th><th>% ricavi</th><th>${ymLabel(addYm(MESE, -1))}</th><th>Δ</th></tr></thead>
+        <tbody>
+          ${testa('Ricavi — cash incassato')}
+          ${riga('Cash incassato (totale)', x => x.lordi, { cls: 'fn-tot' })}
+          ${riga('di cui: nuovi clienti', x => x.s.nuovi, { indent: true })}
+          ${riga('di cui: rate successive', x => x.s.rate, { indent: true })}
+          ${riga('di cui: rinnovi', x => x.s.rinnovi, { indent: true })}
+          ${riga('di cui: upsell', x => x.s.upsell, { indent: true })}
+          ${testa('Storni e rimborsi')}
+          ${riga('Rimborsi e storni', x => x.rimborsi, { costo: true })}
+          ${riga('RICAVI NETTI', x => x.ricaviNetti, { cls: 'fn-tot' })}
+          ${testa('Costi diretti (variabili)')}
+          ${riga('Commissioni venditori', x => x.cm.comm.vend, { costo: true })}
+          ${riga('Commissioni setter', x => x.cm.comm.sett, { costo: true })}
+          ${riga('Commissioni PM / MB / BS', x => x.cm.comm.mgr, { costo: true })}
+          ${riga('Altri costi diretti (registro)', x => x.cm.cat.Diretti, { costo: true })}
+          ${riga('MARGINE LORDO', x => x.margineLordo, { cls: 'fn-tot' })}
+          ${riga('% Margine lordo', x => x.pctLordo, { pct: true, noDelta: true })}
+          ${testa('Costi operativi (struttura)')}
+          ${riga('Costi operativi', x => x.cm.cat.Operativi, { costo: true })}
+          ${riga('MARGINE OPERATIVO', x => x.margineOp, { cls: 'fn-tot' })}
+          ${riga('% Margine operativo', x => x.pctOp, { pct: true, noDelta: true })}
+          ${testa('Costi strutturali (azienda, soci)')}
+          ${riga('Costi strutturali', x => x.cm.cat.Strutturali, { costo: true })}
+          ${riga('EBITDA', x => x.ebitda, { cls: 'fn-tot' })}
+          ${riga('% EBITDA', x => x.pctEbitda, { pct: true, noDelta: true })}
+          ${testa('Investimenti e asset')}
+          ${riga('Investimenti + asset', x => x.cm.capex, { costo: true })}
+          ${riga('CASH FLOW (margine netto)', x => x.cashFlow, { cls: 'fn-tot' })}
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="kpi-row" id="fnPnlInc"></div>
+
+    <div class="card">
+      <h2>Dove vanno i soldi — ${ymLabel(MESE)}</h2>
+      <div class="subtitle">Le 12 voci più pesanti del mese, commissioni incluse.</div>
+      ${topCosti.length ? topCosti.map(([l, v]) => `
+        <div class="esito-row">
+          <div class="esito-top"><span class="lbl">${esc(l)}</span>
+            <span class="val"><b>${eur(v)}</b> · ${fmtPct(pct(v, cm.tot))}</span></div>
+          <div class="esito-track"><div class="esito-fill" style="width:${Math.max(2, Math.round(100 * v / maxCosto))}%;background:var(--series-1)"></div></div>
+        </div>`).join('') : '<div class="status">Nessun costo nel mese.</div>'}
+    </div>`;
+
+  renderKpiRow(_mount.querySelector('#fnPnlKpi'), [
+    { label: 'Fatturato contrattualizzato', value: eur(d.contrattualizzato), sub: 'valore dei contratti firmati nel mese' },
+    { label: 'Ricavi netti (cassa)', value: eur(rn), sub: 'incassato − rimborsi' },
+    { label: 'Margine lordo', value: eur(d.margineLordo), sub: d.pctLordo === null ? '' : pctFrac(d.pctLordo) + ' dei ricavi netti' },
+    { label: 'EBITDA', value: eur(d.ebitda), sub: d.pctEbitda === null ? '' : pctFrac(d.pctEbitda) + ' dei ricavi netti' },
+    { label: 'Cash flow', value: eur(d.cashFlow), sub: 'dopo investimenti e asset' },
+  ]);
+
+  renderKpiRow(_mount.querySelector('#fnPnlInc'), [
+    { label: 'Incidenza personale', value: rn > 0 ? pctFrac(persCost / rn) : '—',
+      sub: eur(persCost) + ' fra team e commissioni' },
+    { label: 'Incidenza costi fissi', value: rn > 0 ? pctFrac(fissi / rn) : '—',
+      sub: 'operativi + strutturali sui ricavi netti' },
+    { label: 'Incidenza marketing', value: rn > 0 ? pctFrac(costoMkt / rn) : '—',
+      sub: eur(costoMkt) + ' di spese marketing registrate' },
+    { label: 'Break even incassi', value: breakEven === null ? '—' : eur(breakEven),
+      sub: 'incasso che copre i costi fissi, al margine lordo del mese' },
+    { label: 'Costi totali', value: eur(cm.tot), sub: 'tutto quello che è uscito nel mese' },
+  ]);
+}
+
+// ── tab Delivery ─────────────────────────────────────────────────────────────
+const CAP_PM = 35;
+
+// una riga per PM (consulente) con il suo carico e i suoi rinnovi
+function deliveryPerPm() {
+  const perNome = centriByNome();
+  const m = new Map();
+  const get = k => {
+    let a = m.get(k);
+    if (!a) { a = { pm: k, gestiti: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
+    return a;
+  };
+  const limite12m = addYm(dstr(todayRome()).slice(0, 7), -11) + '-01';
+
+  for (const c of centriRows()) {
+    const k = c.consulente || '(non assegnato)';
+    const a = get(k);
+    if (isGestito(c)) {
+      a.gestiti += 1;
+      if (hasTag(c.stato_attivita, 'ONBOARDING')) a.onboarding += 1;
+      if (hasTag(c.stato_attivita, 'IN ATTESA DI RINNOVO')) a.attesaRinnovo += 1;
+    }
+    if (c.data_cliente_perso && c.data_cliente_perso >= limite12m) a.persi12m += 1;
+  }
+  // rinnovi e incassato si attribuiscono al PM del centro (join per nome)
+  for (const c of contratti()) {
+    if (!hasTag(c.stato, 'RINNOVO')) continue;
+    const an = perNome.get(chiave(c.nome_centro));
+    get(an && an.consulente ? an.consulente : '(non assegnato)').rinnovi += 1;
+  }
+  for (const r of incassi()) {
+    if (ymOf(r.data_incasso) !== MESE) continue;
+    const an = perNome.get(chiave(r.centro));
+    const k = (an && an.consulente) || r.consulente || '(non assegnato)';
+    get(k).incassato += (+r.importo || 0);
+  }
+  return [...m.values()].map(a => {
+    a.saturazione = a.gestiti / CAP_PM * 100;
+    a.perCliente = a.gestiti > 0 ? a.incassato / a.gestiti : null;
+    return a;
+  });
+}
+
+const pmCols = [
+  { key: 'pm', label: 'Project manager' },
+  { key: 'gestiti', label: 'Clienti gestiti', fmt },
+  { key: 'saturazione', label: 'Saturazione', fmt: v => fmtPct(v) },
+  { key: 'onboarding', label: 'In onboarding', fmt },
+  { key: 'attesaRinnovo', label: 'In attesa rinnovo', fmt },
+  { key: 'rinnovi', label: 'Rinnovi firmati', fmt },
+  { key: 'persi12m', label: 'Persi (12 mesi)', fmt },
+  { key: 'incassato', label: 'Incassato del mese', fmt: eur },
+];
+
+// tasso di rinnovo e churn, mese per mese (ultimi 12)
+function rinnoviChurn() {
+  const months = [];
+  for (let i = 11; i >= 0; i--) months.push(addYm(MESE, -i));
+  const gestiti = centriRows().filter(isGestito).length;
+  const out = months.map(m => {
+    const rin = contratti().filter(c => hasTag(c.stato, 'RINNOVO') && ymOf(c.creazione_contratto) === m);
+    const persi = centriRows().filter(c => ymOf(c.data_cliente_perso) === m).length;
+    const val = rin.reduce((a, c) => a + (+c.valore || 0), 0);
+    const cash = incassi().filter(r => ymOf(r.data_incasso) === m && hasTag(r.tipo_contratto, 'RINNOVO'))
+      .reduce((a, r) => a + (+r.importo || 0), 0);
+    const scaduti = centriRows().filter(c => ymOf(c.fine_servizio) === m).length;
+    return { mese: m, rinnovi: rin.length, persi, valore: val, cash, scaduti,
+             tasso: pct(rin.length, rin.length + persi),
+             churn: gestiti > 0 ? 100 * persi / gestiti : null };
+  });
+  return { months, righe: out, gestiti };
+}
+
+function renderDelivery() {
+  const righe = deliveryPerPm().filter(r => r.gestiti > 0 || r.rinnovi > 0 || r.incassato > 0);
+  const rc = rinnoviChurn();
+  const cm = costiMese(MESE);
+  const teamDel = cm.occ.filter(c => (c.reparto || '') === 'Delivery');
+  const costoTeam = sumImporti(teamDel);
+  const gestiti = rc.gestiti;
+  const nPM = new Set(centriRows().filter(isGestito).map(x => x.consulente).filter(Boolean)).size;
+  const perRuolo = RUOLI_DELIVERY.map(ru => ({
+    ruolo: ru,
+    voci: teamDel.filter(c => (c.ruolo || 'Altri ruoli') === ru).length,
+    costo: sumImporti(teamDel.filter(c => (c.ruolo || 'Altri ruoli') === ru)),
+  })).filter(x => x.voci > 0);
+  const ultimi = rc.righe.slice(-12);
+  const rinTot = ultimi.reduce((a, r) => a + r.rinnovi, 0);
+  const persiTot = ultimi.reduce((a, r) => a + r.persi, 0);
+  const churnMedio = ultimi.length ? ultimi.reduce((a, r) => a + (r.churn || 0), 0) / ultimi.length : null;
+
+  _mount.querySelector('#fnContent').innerHTML = `
+    <div class="kpi-row" id="fnDelKpi"></div>
+
+    <div class="card">
+      <h2>Carico per project manager</h2>
+      <div class="subtitle">Clienti in gestione (tutti gli stati tranne CLIENTE PERSO/SPARITO) e saturazione
+        sulla capienza di riferimento di ${CAP_PM} clienti per PM. Rinnovi e incassato sono attribuiti
+        al PM del centro (join per nome del centro).</div>
+      <div class="table-scroll"><table id="fnPm"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>Costo del team delivery — ${ymLabel(MESE)}</h2>
+      <div class="subtitle">Dalle voci del registro costi con reparto Delivery. Modificale nella tab Costi.</div>
+      <div class="table-scroll"><table id="fnRuoli"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>Rinnovi e churn, mese per mese</h2>
+      <div class="subtitle"><strong>Tasso di rinnovo</strong> = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese.
+        <strong>Churn</strong> = clienti persi nel mese ÷ ${fmt(gestiti)} clienti oggi in gestione: il denominatore è
+        fisso (non abbiamo lo storico mensile della base gestita), quindi va letto come ordine di grandezza.
+        "Contratti in scadenza" = clienti con FINE SERVIZIO in quel mese.</div>
+      <div class="table-scroll"><table class="fn-pnl">
+        <thead><tr><th>Mese</th><th>Rinnovi</th><th>Clienti persi</th><th>Tasso di rinnovo</th><th>Churn</th><th>In scadenza</th><th>Valore rinnovi</th><th>Incassato su rinnovi</th></tr></thead>
+        <tbody>
+          ${ultimi.map(r => `<tr>
+            <td class="name">${ymLabel(r.mese)}</td>
+            <td>${fmt(r.rinnovi)}</td>
+            <td>${fmt(r.persi)}</td>
+            <td>${r.tasso === null ? '—' : `<span class="${r.tasso >= 30 ? 'val-good' : 'val-bad'}">${fmtPct(r.tasso)}</span>`}</td>
+            <td>${r.churn === null ? '—' : fmtPct(r.churn)}</td>
+            <td>${fmt(r.scaduti)}</td>
+            <td>${eur(r.valore)}</td>
+            <td>${eur(r.cash)}</td></tr>`).join('')}
+          <tr class="fn-tot"><td class="name">Totale 12 mesi</td>
+            <td>${fmt(rinTot)}</td><td>${fmt(persiTot)}</td>
+            <td>${fmtPct(pct(rinTot, rinTot + persiTot))}</td>
+            <td>${churnMedio === null ? '—' : fmtPct(churnMedio)}</td>
+            <td>${fmt(ultimi.reduce((a, r) => a + r.scaduti, 0))}</td>
+            <td>${eur(ultimi.reduce((a, r) => a + r.valore, 0))}</td>
+            <td>${eur(ultimi.reduce((a, r) => a + r.cash, 0))}</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2>Classifica per rinnovi</h2>
+      <div class="subtitle">Contratti di rinnovo attribuiti al project manager e alla beauty specialist del centro,
+        su tutto lo storico disponibile.</div>
+      <div class="fn-rank" id="fnRank"></div>
+    </div>`;
+
+  renderKpiRow(_mount.querySelector('#fnDelKpi'), [
+    { label: 'Clienti in gestione', value: fmt(gestiti), sub: nPM + ' project manager attivi' },
+    { label: 'Media per PM', value: fmt1(safeDiv(gestiti, nPM)), sub: 'capienza di riferimento ' + CAP_PM },
+    { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese' },
+    { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti)), sub: 'solo team delivery' },
+    { label: 'Tasso di rinnovo 12 mesi', value: fmtPct(pct(rinTot, rinTot + persiTot)),
+      sub: rinTot + ' rinnovi su ' + (rinTot + persiTot) + ' esiti' },
+    { label: 'Churn medio mensile', value: churnMedio === null ? '—' : fmtPct(churnMedio),
+      sub: 'sui clienti in gestione' },
+  ]);
+
+  renderTable(_mount.querySelector('#fnPm'), pmCols, righe, pmSort,
+    k => { pmSort = { key: k, dir: pmSort.key === k ? -pmSort.dir : -1 }; renderDelivery(); },
+    { barKey: 'gestiti' });
+
+  const elR = _mount.querySelector('#fnRuoli');
+  if (!perRuolo.length) elR.innerHTML = '<div class="status">Nessuna voce Delivery nel registro costi.</div>';
+  else renderTable(elR, [
+    { key: 'ruolo', label: 'Ruolo' },
+    { key: 'voci', label: 'Persone / voci', fmt },
+    { key: 'costo', label: 'Costo del mese', fmt: eur },
+    { key: 'quota', label: 'Quota', fmt: v => fmtPct(v) },
+  ], perRuolo.map(x => ({ ...x, quota: pct(x.costo, costoTeam) })), { key: 'costo', dir: -1 }, () => {},
+    { barKey: 'costo' });
+
+  // classifica PM e beauty specialist per numero di rinnovi
+  const perNome = centriByNome();
+  const conta = campo => {
+    const m = new Map();
+    for (const c of contratti()) {
+      if (!hasTag(c.stato, 'RINNOVO')) continue;
+      const an = perNome.get(chiave(c.nome_centro));
+      const k = (an && an[campo]) || '(non assegnato)';
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return [...m.entries()].map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n).slice(0, 10);
+  };
+  const lista = (titolo, rows) => {
+    const max = Math.max(...rows.map(r => r.n), 1);
+    return `<div class="fn-rank-card"><h3>${titolo}</h3>${rows.length ? rows.map(r => `
+      <div class="esito-row">
+        <div class="esito-top"><span class="lbl">${esc(r.nome)}</span><span class="val"><b>${fmt(r.n)}</b></span></div>
+        <div class="esito-track"><div class="esito-fill" style="width:${Math.max(3, Math.round(100 * r.n / max))}%;background:var(--series-2)"></div></div>
+      </div>`).join('') : '<div class="status">Nessun rinnovo.</div>'}</div>`;
+  };
+  _mount.querySelector('#fnRank').innerHTML =
+    lista('Project manager', conta('consulente')) + lista('Beauty specialist', conta('beauty'));
+}
+
+// ── tab Clienti & LTV ────────────────────────────────────────────────────────
+function ltvRows() {
+  const perNome = centriByNome();
+  const m = new Map();
+  for (const r of incassi()) {
+    if (!incassata(r)) continue;
+    const k = r.centro || '(senza centro)';
+    let a = m.get(k);
+    if (!a) {
+      const an = perNome.get(chiave(k));
+      a = { centro: k, incassato: 0, nRate: 0, primo: null, ultimo: null,
+            consulente: (an && an.consulente) || r.consulente || null,
+            inizio: an ? an.inizio_servizio : null,
+            fine: an ? an.fine_servizio : null,
+            perso: an ? !!an.data_cliente_perso : false };
+      m.set(k, a);
+    }
+    a.incassato += (+r.importo || 0);
+    a.nRate += 1;
+    const d = r.data_incasso;
+    if (d && (!a.primo || d < a.primo)) a.primo = d;
+    if (d && (!a.ultimo || d > a.ultimo)) a.ultimo = d;
+  }
+  const oggi = dstr(todayRome());
+  return [...m.values()].map(a => {
+    const da = a.inizio || a.primo;
+    const al = a.fine && a.fine < oggi ? a.fine : (a.perso && a.ultimo ? a.ultimo : oggi);
+    a.mesi = da ? Math.max(1, (mesiTra(da, al) || 0) + 1) : null;
+    a.perMese = a.mesi ? a.incassato / a.mesi : null;
+    a.stato = a.perso ? 'perso' : 'attivo';
+    return a;
+  });
+}
+
+const ltvCols = [
+  { key: 'centro', label: 'Cliente' },
+  { key: 'incassato', label: 'Incassato totale', fmt: eur },
+  { key: 'nRate', label: 'Rate', fmt },
+  { key: 'mesi', label: 'Mesi attivo', fmt: v => v === null ? '—' : fmt(v) },
+  { key: 'perMese', label: 'Incassato / mese', fmt: v => v === null ? '—' : eur(v) },
+  { key: 'primo', label: 'Primo incasso', fmt: dtIt },
+  { key: 'ultimo', label: 'Ultimo incasso', fmt: dtIt },
+  { key: 'consulente', label: 'PM', fmt: v => esc(v || '—') },
+  { key: 'stato', label: 'Stato', fmt: v => v === 'perso' ? '<span class="val-bad">perso</span>' : '<span class="val-good">attivo</span>' },
+];
+
+function renderClienti() {
+  const righe = ltvRows();
+  const totIncassato = righe.reduce((a, r) => a + r.incassato, 0);
+  const ltv = righe.length ? totIncassato / righe.length : null;
+  const conMesi = righe.filter(r => r.mesi);
+  const durata = conMesi.length ? conMesi.reduce((a, r) => a + r.mesi, 0) / conMesi.length : null;
+  const rinnoviTot = contratti().filter(c => hasTag(c.stato, 'RINNOVO')).length;
+  const persiTot = centriRows().filter(c => c.data_cliente_perso).length;
+  const retention = pct(rinnoviTot, rinnoviTot + persiTot);
+  const attivi = righe.filter(r => r.stato === 'attivo').length;
+
+  // andamento per mese: nuovi, rinnovi, contrattualizzato, incassato (12 mesi)
+  const months = [];
+  for (let i = 11; i >= 0; i--) months.push(addYm(MESE, -i));
+  const perMese = months.map(m => {
+    const c = contrattualizzato(m);
+    const inc = incassi().filter(r => ymOf(r.data_incasso) === m).reduce((a, r) => a + (+r.importo || 0), 0);
+    const persi = centriRows().filter(x => ymOf(x.data_cliente_perso) === m).length;
+    return { mese: m, nuovi: c.nuovi, rinnovi: c.rinnovi, contr: c.tot, inc, persi };
+  });
+
+  _mount.querySelector('#fnContent').innerHTML = `
+    <div class="kpi-row" id="fnLtvKpi"></div>
+
+    <div class="card">
+      <h2>Andamento per mese</h2>
+      <div class="subtitle">Ultimi 12 mesi: contratti nuovi e di rinnovo creati, valore contrattualizzato,
+        incassato effettivo e clienti persi.</div>
+      <div class="table-scroll"><table class="fn-pnl">
+        <thead><tr><th>Mese</th><th>Nuovi clienti</th><th>Rinnovi</th><th>Clienti persi</th><th>Contrattualizzato</th><th>Incassato</th></tr></thead>
+        <tbody>${perMese.map(r => `<tr>
+          <td class="name">${ymLabel(r.mese)}</td>
+          <td>${fmt(r.nuovi)}</td><td>${fmt(r.rinnovi)}</td>
+          <td>${r.persi > 0 ? `<span class="val-bad">${fmt(r.persi)}</span>` : '0'}</td>
+          <td>${eur(r.contr)}</td><td>${eur(r.inc)}</td></tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="card">
+      <h2>Clienti per valore incassato</h2>
+      <div class="subtitle">Tutto lo storico degli incassi, un cliente per riga. "Mesi attivo" parte da INIZIO SERVIZIO
+        (o dal primo incasso se manca) e arriva a fine servizio, all'ultimo incasso se il cliente è perso, o a oggi.</div>
+      <div class="table-scroll"><table id="fnLtv"></table></div>
+    </div>`;
+
+  renderKpiRow(_mount.querySelector('#fnLtvKpi'), [
+    { label: 'LTV medio', value: eur(ltv), sub: 'incassato storico ÷ clienti paganti' },
+    { label: 'Clienti paganti', value: fmt(righe.length), sub: attivi + ' ancora attivi' },
+    { label: 'Incassato storico', value: eur(totIncassato), sub: 'tutte le rate incassate' },
+    { label: 'Durata media', value: durata === null ? '—' : fmt1(durata) + ' mesi', sub: 'dal primo giorno di servizio' },
+    { label: 'Retention', value: fmtPct(retention), sub: rinnoviTot + ' rinnovi su ' + (rinnoviTot + persiTot) + ' esiti storici' },
+    { label: 'Incassato medio / mese cliente', value: eur(safeDiv(totIncassato, conMesi.reduce((a, r) => a + r.mesi, 0))),
+      sub: 'quanto rende un cliente ogni mese' },
+  ]);
+
+  renderTable(_mount.querySelector('#fnLtv'), ltvCols, righe, ltvSort,
+    k => { ltvSort = { key: k, dir: ltvSort.key === k ? -ltvSort.dir : -1 }; renderClienti(); },
+    { barKey: 'incassato' });
+}
+
+// ── tab Report (export) ──────────────────────────────────────────────────────
+// CSV per Excel italiano: separatore ';', virgola decimale, BOM UTF-8.
+const csvNum = n => (n === null || n === undefined || n === '') ? '' : String(n).replace('.', ',');
+function csvTesto(righe) {
+  return righe.map(r => r.map(v => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(';')).join('\n');
+}
+function scarica(nome, testo) {
+  const blob = new Blob(['﻿' + testo], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+const EXPORT = {
+  incassiMese: () => ({
+    nome: 'incassi_' + MESE + '.csv',
+    righe: [['ID incasso', 'Centro', 'Consulente', 'Venditore', 'Data incasso', 'Scadenza', 'Importo', 'Rata n°', 'Metodo', 'Tipo contratto', 'Comm. venditore', 'Comm. setter']]
+      .concat(incassi().filter(r => ymOf(r.data_incasso) === MESE).map(r => [
+        r.id_incasso, r.centro, r.consulente, r.venditore, r.data_incasso, r.data_scadenza,
+        csvNum(r.importo), csvNum(r.rata_numero), r.metodo, (r.tipo_contratto || []).join(' · '),
+        csvNum(r.comm_venditore), csvNum(r.comm_setter)])),
+  }),
+  incassiTutti: () => ({
+    nome: 'incassi_tutti.csv',
+    righe: [['ID incasso', 'Centro', 'Consulente', 'Data incasso', 'Scadenza', 'Importo', 'Rata n°', 'Incassata', 'Metodo', 'Tipo contratto']]
+      .concat(incassi().map(r => [
+        r.id_incasso, r.centro, r.consulente, r.data_incasso, r.data_scadenza,
+        csvNum(r.importo), csvNum(r.rata_numero), incassata(r) ? 'sì' : 'no', r.metodo,
+        (r.tipo_contratto || []).join(' · ')])),
+  }),
+  insolute: () => ({
+    nome: 'rate_insolute_' + MESE + '.csv',
+    righe: [['Centro', 'Scadenza', 'Giorni di ritardo', 'Importo', 'Rata n°', 'Consulente', 'Venditore']]
+      .concat(insolute(MESE).righe.map(r => [
+        r.centro, r.data_scadenza, giorniRitardo(r.data_scadenza), csvNum(r.importo),
+        csvNum(r.rata_numero), r.consulente, r.venditore])),
+  }),
+  contratti: () => ({
+    nome: 'contratti.csv',
+    righe: [['Centro', 'ID contratto', 'Creazione', 'Valore', 'Stato', 'Durata', 'Venditore', 'Agenzia']]
+      .concat(contratti().map(c => [
+        c.nome_centro, c.id_contratto, c.creazione_contratto, csvNum(c.valore),
+        (c.stato || []).join(' · '), (c.durata || []).join(' · '), c.venditore, (c.agenzia || []).join(' · ')])),
+  }),
+  costi: () => ({
+    nome: 'costi.csv',
+    righe: [['Descrizione', 'Reparto', 'Ruolo', 'Sottocategoria', 'Categoria P&L', 'Importo', 'Data', 'Fine', 'Frequenza', 'Attiva', 'Note']]
+      .concat(costi().map(c => [
+        c.descrizione, c.reparto, c.ruolo, c.sottocategoria, c.categoria, csvNum(c.importo),
+        c.data, c.fine, c.frequenza, c.attivo ? 'sì' : 'no', c.note])),
+  }),
+  pnl12: () => {
+    const ms = [];
+    for (let i = 11; i >= 0; i--) ms.push(pnl(addYm(MESE, -i)));
+    const riga = (label, get) => [label].concat(ms.map(d => csvNum(Math.round(get(d) * 100) / 100)));
+    return {
+      nome: 'pnl_12_mesi_al_' + MESE + '.csv',
+      righe: [['Voce'].concat(ms.map(d => d.m)),
+        riga('Cash incassato', d => d.lordi),
+        riga('di cui nuovi clienti', d => d.s.nuovi),
+        riga('di cui rate', d => d.s.rate),
+        riga('di cui rinnovi', d => d.s.rinnovi),
+        riga('di cui upsell', d => d.s.upsell),
+        riga('Rimborsi', d => d.rimborsi),
+        riga('Ricavi netti', d => d.ricaviNetti),
+        riga('Commissioni', d => d.cm.comm.tot),
+        riga('Altri costi diretti', d => d.cm.cat.Diretti),
+        riga('Margine lordo', d => d.margineLordo),
+        riga('Costi operativi', d => d.cm.cat.Operativi),
+        riga('Margine operativo', d => d.margineOp),
+        riga('Costi strutturali', d => d.cm.cat.Strutturali),
+        riga('EBITDA', d => d.ebitda),
+        riga('Investimenti e asset', d => d.cm.capex),
+        riga('Cash flow', d => d.cashFlow),
+        riga('Contrattualizzato', d => d.contrattualizzato)],
+    };
+  },
+};
+
+function renderReport() {
+  const voci = [
+    ['incassiMese', 'Incassi del mese', 'Tutte le rate con data incasso in ' + ymLabel(MESE) + ', con commissioni.'],
+    ['incassiTutti', 'Incassi — storico completo', 'Ogni rata del database, incassata e non.'],
+    ['insolute', 'Rate scadute e non incassate', 'La lista di recupero, con i giorni di ritardo.'],
+    ['contratti', 'Contratti', 'Valore, stato, durata e venditore di ogni contratto.'],
+    ['costi', 'Registro costi', 'Tutte le voci, incluse quelle disattivate.'],
+    ['pnl12', 'P&L — 12 mesi', 'Il conto economico mese per mese, pronto per Excel.'],
+  ];
+  _mount.querySelector('#fnContent').innerHTML = `
+    <div class="card">
+      <h2>Esportazioni</h2>
+      <div class="subtitle">File CSV pronti per Excel (separatore <code>;</code>, virgola decimale).
+        Rispettano il mese e l'agenzia selezionati in alto.</div>
+      <div class="fn-export">
+        ${voci.map(([k, t, s]) => `
+          <div class="fn-export-row">
+            <div><b>${t}</b><div class="subtitle" style="margin:2px 0 0">${s}</div></div>
+            <button class="tk-btn tk-btn-pri" data-exp="${k}">Scarica CSV</button>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Come sono calcolati i numeri</h2>
+      <div class="subtitle">Le definizioni che contano, per non doverle ricostruire ogni volta.</div>
+      <ul class="fn-note">
+        <li><b>Incassato</b>: somma di IMPORTO RATA delle righe con DATA INCASSO nel mese (Notion DATABASE INCASSI).
+          Una rata conta come incassata se ha la data di incasso o la spunta PAGATO.</li>
+        <li><b>Contrattualizzato</b>: somma di VALORE CONTRATTO dei contratti creati nel mese
+          (DATABASE VALORE CONTRATTI), per data di creazione.</li>
+        <li><b>Nuovi / rate / rinnovi / upsell</b>: un incasso è "nuovo cliente" se il suo contratto è stato creato
+          nello stesso mese; rinnovi e upsell seguono il tag esatto sul contratto.</li>
+        <li><b>Commissioni</b>: formule di Notion sulla singola rata (venditore 10%, setter 5%, PM/MB/BS sui rinnovi),
+          sommate sugli incassi del mese. Non sono stime.</li>
+        <li><b>Costi</b>: registro interno (tab Costi). Una voce mensile conta da <i>data inizio</i> in poi,
+          una annua nello stesso mese di ogni anno, una tantum solo nel suo mese.</li>
+        <li><b>EBITDA</b>: ricavi netti − costi correnti − commissioni, <b>esclusi</b> investimenti e asset.
+          <b>Cash flow / margine netto</b>: EBITDA meno gli investimenti.</li>
+        <li><b>Clienti persi</b>: DATA CLIENTE PERSO su Notion DATABASE CLIENTI, nel mese.</li>
+        <li><b>Confronto col mese prima</b>: se il mese è in corso, il precedente viene tagliato allo stesso giorno,
+          altrimenti il confronto sarebbe sempre in perdita.</li>
+      </ul>
+    </div>`;
+
+  _mount.querySelectorAll('button[data-exp]').forEach(b => b.onclick = () => {
+    const { nome, righe } = EXPORT[b.dataset.exp]();
+    scarica(nome, csvTesto(righe));
+  });
+}
+
 // ── barra mese + agenzia + tab ───────────────────────────────────────────────
 function renderBar() {
   const mi = _mount.querySelector('#fnMese');
@@ -660,10 +1250,15 @@ function renderBar() {
     b.classList.toggle('active', b.dataset.tab === TAB));
 }
 
+const RENDER_TAB = {
+  dash: renderDash, costi: renderCostiPage, pnl: renderPnl,
+  delivery: renderDelivery, clienti: renderClienti, report: renderReport,
+};
+
 function renderAll() {
   renderBar();
-  if (TAB === 'costi') renderCostiPage();
-  else renderDash();
+  (RENDER_TAB[TAB] || renderDash)();
+  _mount.scrollTop = 0;
 }
 
 // ── ciclo di rendering ───────────────────────────────────────────────────────
@@ -695,7 +1290,8 @@ async function load() {
 export async function render(mount, params) {
   _mount = mount;
   _renderId++;
-  TAB = params && params.get && params.get('tab') === 'costi' ? 'costi' : 'dash';
+  const t = params && params.get ? params.get('tab') : null;
+  TAB = RENDER_TAB[t] ? t : 'dash';
   mount.innerHTML = `
     <div class="filters" style="margin-bottom:8px">
       <span class="filter-cap">Mese</span>
@@ -705,8 +1301,7 @@ export async function render(mount, params) {
       <span id="fnAgWrap" class="hidden"><span class="filter-cap">Agenzia</span><span id="fnAgChips"></span></span>
     </div>
     <div class="lead-tabs" id="fnTabs" style="margin-bottom:12px">
-      <button data-tab="dash">Dashboard</button>
-      <button data-tab="costi">Costi</button>
+      ${TABS.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join('')}
     </div>
     <div id="fnStatus" class="status loading">Caricamento dati…</div>
     <div id="fnContent" class="hidden"></div>
@@ -718,7 +1313,7 @@ export async function render(mount, params) {
   mount.querySelectorAll('#fnTabs button').forEach(b => b.onclick = () => {
     TAB = b.dataset.tab;
     // il tab resta nell'URL (refresh e link diretti), senza rifare la history
-    history.replaceState(null, '', '#/finance' + (TAB === 'costi' ? '?tab=costi' : ''));
+    history.replaceState(null, '', '#/finance' + (TAB === 'dash' ? '' : '?tab=' + TAB));
     if (DATA) renderAll();
   });
 

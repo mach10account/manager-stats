@@ -807,3 +807,22 @@ select.ac-vede {
   .tk-campi { grid-template-columns: 1fr; }
   .tk-panel { width: 100%; }
 }
+
+/* ── FINANCE: tabelle statiche (P&L, rinnovi, andamento) e pagine di supporto ── */
+.fn-pnl th { cursor: default; }
+.fn-pnl tr.fn-head td {
+  padding-top: 17px; border-bottom: none; font-weight: 800;
+  font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+.fn-pnl tr.fn-tot td { font-weight: 700; border-top: 1px solid var(--baseline); }
+.fn-pnl td.fn-quota { color: var(--muted); }
+.fn-rank { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
+.fn-rank-card h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+.fn-export-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 13px 0; border-bottom: 1px solid var(--grid);
+}
+.fn-export-row:last-child { border-bottom: none; }
+.fn-export-row > div { margin-right: auto; }
+.fn-note { margin: 4px 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.55; }
+.fn-note li { margin-bottom: 7px; }
