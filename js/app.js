@@ -11,7 +11,7 @@ import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';
 import * as vendita from './sections/vendita.js';
-import * as finance from './sections/finance.js?v=6';   // ?v da bumpare quando cambia finance.js (vedi nota in index.html)
+import * as sauron from './sections/sauron.js?v=7';   // ?v da bumpare quando cambia sauron.js (vedi nota in index.html)
 import * as accessi from './sections/accessi.js';
 import * as task from './sections/task.js';
 
@@ -22,7 +22,7 @@ const sections = {
   '/coorti': coorti,
   '/beauty': beauty,
   '/vendita': vendita,
-  '/finance': finance,
+  '/sauron': sauron,
   '/task': task,
   '/accessi': accessi,
 };
@@ -34,11 +34,12 @@ const permessoDi = {
   '/coorti': 'coorti',
   '/beauty': 'beauty',
   '/vendita': 'vendita',
-  '/finance': 'finance',        // 'finance' non si assegna dal pannello Accessi: di fatto solo admin
+  '/sauron': 'finance',         // il permesso resta 'finance' (RLS/ms_puo): non si assegna dal pannello Accessi, di fatto solo admin
   '/task': 'task',              // 'task' non si assegna: ms_mie_sezioni() la dà a ogni utente attivo
   '/accessi': 'admin',
 };
-const ALIAS = { '/chiamate': '/beauty' };   // la sezione si chiamava Chiamate: i vecchi link continuano a funzionare
+// vecchi nomi delle sezioni: i link salvati continuano a funzionare
+const ALIAS = { '/chiamate': '/beauty', '/finance': '/sauron' };
 
 let MIE_SEZIONI = [];
 const isAdmin = () => MIE_SEZIONI.includes('admin');
@@ -143,9 +144,9 @@ function renderCurrent() {
     path === '/vendita' || !filtroConsulenteUtile());
   // in Task i filtri in alto non servono: le tab (arretrate/oggi/prossime) sono
   // il filtro, e un preset "7 giorni" nasconderebbe le task arretrate.
-  // In Finance la vista è mensile: il selettore mese sta dentro la sezione.
+  // In Sauron la vista è mensile: il selettore mese sta dentro la sezione.
   const filterBar = $('filterBar');
-  if (filterBar) filterBar.classList.toggle('hidden', path === '/task' || path === '/finance');
+  if (filterBar) filterBar.classList.toggle('hidden', path === '/task' || path === '/sauron');
   mount.innerHTML = '<div class="status loading">Caricamento…</div>';
   Promise.resolve()
     .then(() => sections[path].render(mount, route.params))

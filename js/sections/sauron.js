@@ -1,4 +1,4 @@
-// manager-stats · Sezione Finance (solo admin) — porting del prototipo CFO Cockpit
+// manager-stats · Sezione Sauron (ex Finance, solo admin) — porting del prototipo CFO Cockpit
 //
 // Fonti: fin_incassi (1 riga = 1 rata, da Notion 🏦 DATABASE INCASSI),
 // fin_contratti (1 riga = 1 contratto, da DATABASE VALORE CONTRATTI),
@@ -1274,7 +1274,7 @@ async function load() {
     if (myId !== _renderId || !_mount.querySelector('#fnContent')) return;
     DATA = data;
     if (!data.incassi.length && !data.contratti.length) {
-      status.textContent = 'Nessun dato finance disponibile (il sync gira ogni ora al minuto 50).';
+      status.textContent = 'Nessun dato disponibile (il sync gira ogni ora al minuto 50).';
       return;
     }
     renderAll();
@@ -1313,7 +1313,7 @@ export async function render(mount, params) {
   mount.querySelectorAll('#fnTabs button').forEach(b => b.onclick = () => {
     TAB = b.dataset.tab;
     // il tab resta nell'URL (refresh e link diretti), senza rifare la history
-    history.replaceState(null, '', '#/finance' + (TAB === 'dash' ? '' : '?tab=' + TAB));
+    history.replaceState(null, '', '#/sauron' + (TAB === 'dash' ? '' : '?tab=' + TAB));
     if (DATA) renderAll();
   });
 

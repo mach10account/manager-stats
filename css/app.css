@@ -808,7 +808,7 @@ select.ac-vede {
   .tk-panel { width: 100%; }
 }
 
-/* ── FINANCE: tabelle statiche (P&L, rinnovi, andamento) e pagine di supporto ── */
+/* ── SAURON (ex Finance): tabelle statiche (P&L, rinnovi, andamento) e supporto ── */
 .fn-pnl th { cursor: default; }
 .fn-pnl tr.fn-head td {
   padding-top: 17px; border-bottom: none; font-weight: 800;
