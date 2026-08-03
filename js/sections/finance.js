@@ -192,13 +192,17 @@ function commissioniMese(m) {
 
 const sumImporti = list => list.reduce((a, c) => a + (+c.importo || 0), 0);
 
-// totale costi del mese: voci ricorrenti/una-tantum + commissioni auto
+// totale costi del mese: voci ricorrenti/una-tantum + commissioni auto.
+// capex = voci con categoria P&L Asset/Investimenti: contano nel totale costi
+// (e nel margine netto) ma NON nell'EBITDA.
 function costiMese(m) {
   const occ = costi().filter(c => costOccurs(c, m));
   const rimborsi = sumImporti(occ.filter(c => (c.sottocategoria || '') === 'Rimborsi'));
-  const manuali = sumImporti(occ.filter(c => (c.sottocategoria || '') !== 'Rimborsi'));
+  const voci = occ.filter(c => (c.sottocategoria || '') !== 'Rimborsi');
+  const manuali = sumImporti(voci);
+  const capex = sumImporti(voci.filter(c => c.categoria === 'Asset' || c.categoria === 'Investimenti'));
   const comm = commissioniMese(m);
-  return { occ, manuali, rimborsi, comm, tot: manuali + rimborsi + comm.tot };
+  return { occ, manuali, capex, rimborsi, comm, tot: manuali + rimborsi + comm.tot };
 }
 
 // ── KPI dashboard ────────────────────────────────────────────────────────────
@@ -227,10 +231,15 @@ function renderKPI() {
   const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean)).size;
   const riemp = nPM > 0 ? gestiti.length / (nPM * CAP_PM) : null;
 
-  // costi reali dal registro + commissioni → margine e ROI
+  // costi reali dal registro + commissioni → margine, EBITDA e ROI.
+  // EBITDA (per cassa): incassato netto − costi correnti − commissioni,
+  // ESCLUSI investimenti/asset (capex); interessi e tasse non sono nel registro.
   const cm = costiMese(MESE);
   const margine = s.tot - cm.tot;
   const roi = cm.tot > 0 ? margine / cm.tot : null;
+  const ricaviNetti = s.tot - cm.rimborsi;
+  const ebitda = ricaviNetti - (cm.manuali - cm.capex) - cm.comm.tot;
+  const pctEbitda = ricaviNetti > 0 ? ebitda / ricaviNetti : null;
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
@@ -271,8 +280,11 @@ function renderKPI() {
       { label: 'Aziende gestite', value: fmt(gestiti.length), sub: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
       { label: 'Costi del mese', value: eur(cm.tot),
         sub: 'voci ' + eur(cm.manuali) + ' + commissioni ' + eur(cm.comm.tot) + (cm.rimborsi > 0 ? ' + rimborsi ' + eur(cm.rimborsi) : '') },
+      { label: 'EBITDA', value: eur(ebitda), tone: ebitda >= 0 ? 'good' : 'bad',
+        sub: (pctEbitda !== null ? pctFrac(pctEbitda) + " dell'incassato netto · " : '')
+          + 'esclusi investimenti e asset' + (cm.capex > 0 ? ' (' + eur(cm.capex) + ')' : '') },
       { label: 'Margine netto', value: eur(margine), tone: margine >= 0 ? 'good' : 'bad',
-        sub: 'incassato − costi (commissioni incluse)' },
+        sub: 'incassato − tutti i costi del mese, capex e rimborsi inclusi' },
       { label: 'ROI', value: roi === null ? '—' : pctFrac(roi), tone: roi === null ? undefined : (roi >= 0 ? 'good' : 'bad'),
         sub: 'margine netto ÷ costi del mese' },
     ] },
