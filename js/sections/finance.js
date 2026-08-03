@@ -78,11 +78,14 @@ function contrattiById() {
   return m;
 }
 
-// incassato del mese, spezzato in nuovi / rate / rinnovi / upsell
-function splitIncassato(m, byId) {
+// incassato del mese, spezzato in nuovi / rate / rinnovi / upsell.
+// maxDay ('03'…'31'): considera solo i giorni 1..maxDay — serve per confrontare
+// un mese in corso con la STESSA porzione del mese precedente.
+function splitIncassato(m, byId, maxDay) {
   const t = { tot: 0, n: 0, nuovi: 0, rate: 0, rinnovi: 0, upsell: 0 };
   for (const r of incassi()) {
     if (ymOf(r.data_incasso) !== m) continue;
+    if (maxDay && r.data_incasso.slice(8, 10) > maxDay) continue;
     const imp = +r.importo || 0;
     t.tot += imp; t.n += 1;
     if (hasTag(r.tipo_contratto, 'RINNOVO')) t.rinnovi += imp;
@@ -96,10 +99,11 @@ function splitIncassato(m, byId) {
   return t;
 }
 
-function contrattualizzato(m) {
+function contrattualizzato(m, maxDay) {
   const t = { tot: 0, n: 0, rinnovi: 0, rinnoviVal: 0, upsell: 0, nuovi: 0 };
   for (const c of contratti()) {
     if (ymOf(c.creazione_contratto) !== m) continue;
+    if (maxDay && c.creazione_contratto.slice(8, 10) > maxDay) continue;
     const v = +c.valore || 0;
     t.tot += v; t.n += 1;
     if (hasTag(c.stato, 'RINNOVO')) { t.rinnovi += 1; t.rinnoviVal += v; }
@@ -139,14 +143,22 @@ function insolute(m) {
 // ── KPI ──────────────────────────────────────────────────────────────────────
 function renderKPI() {
   const byId = contrattiById();
+  // mese in corso = confronto ad armi pari: il mese prima viene tagliato allo
+  // stesso giorno (1–3 ago vs 1–3 lug), altrimenti a inizio mese il delta
+  // sarebbe sempre un -90% senza senso. Mesi chiusi = mese pieno vs mese pieno.
+  const oggi = dstr(todayRome());
+  const maxDay = MESE === oggi.slice(0, 7) ? oggi.slice(8, 10) : null;
   const s = splitIncassato(MESE, byId);
-  const sPrev = splitIncassato(addYm(MESE, -1), byId);
+  const sPrev = splitIncassato(addYm(MESE, -1), byId, maxDay);
   const c = contrattualizzato(MESE);
-  const cPrev = contrattualizzato(addYm(MESE, -1));
+  const cPrev = contrattualizzato(addYm(MESE, -1), maxDay);
   const sc = scadenze(MESE);
   const ins = insolute(MESE);
   const insPct = pct(ins.nonIncassate, ins.scadute);
-  const delta = (cur, prev) => prev > 0 ? (cur >= prev ? '+' : '') + fmt(100 * (cur - prev) / prev) + '% sul mese prima (' + eur(prev) + ')' : null;
+  const rif = maxDay ? 'sui giorni 1–' + (+maxDay) + ' del mese prima' : 'sul mese prima';
+  const delta = (cur, prev) => prev > 0
+    ? (cur >= prev ? '+' : '') + fmt(100 * (cur - prev) / prev) + '% ' + rif + ' (' + eur(prev) + ')'
+    : null;
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
