@@ -22,7 +22,7 @@ import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
 import { renderTable, renderKpiGroups } from '../tables.js';
 import { renderLineChart } from '../charts.js';
-import { fmt, eur, pct, fmtPct, safeDiv, dstr, todayRome, esc } from '../format.js';
+import { fmt, eur, pct, fmtPct, pctFrac, safeDiv, dstr, todayRome, esc } from '../format.js';
 
 let DATA = null;          // { incassi, contratti } grezzi (già filtrati dalla RLS)
 let _mount = null;
@@ -46,15 +46,20 @@ let insSort = { key: 'data_scadenza', dir: 1 };
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData() {
-  const [incassi, contratti] = await Promise.all([
+  const [incassi, contratti, centri] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('fin_incassi')
       .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo')
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_contratti')
       .select('nome_centro,id_contratto,valore,stato,durata,agenzia,venditore,creazione_contratto')
       .range(lo, hi)),
+    // anagrafica clienti: serve per churn (DATA CLIENTE PERSO) e riempimento team.
+    // Select dedicato e non loadCentri: colonne diverse e niente cache condivisa.
+    fetchAll((lo, hi) => supabase.from('centri')
+      .select('nome,agenzia,stato_attivita,consulente,data_cliente_perso')
+      .range(lo, hi)),
   ]);
-  return { incassi, contratti };
+  return { incassi, contratti, centri };
 }
 
 // ── filtri e definizioni ─────────────────────────────────────────────────────
@@ -62,6 +67,9 @@ const hasTag = (arr, tag) => Array.isArray(arr) && arr.indexOf(tag) !== -1;
 const inAg = r => !AGENZIA || hasTag(r.agenzia, AGENZIA);
 const incassi = () => DATA.incassi.filter(inAg);
 const contratti = () => DATA.contratti.filter(inAg);
+const centriRows = () => (DATA.centri || []).filter(inAg);
+const PERSO_TAG = 'CLIENTE PERSO/SPARITO';
+const isGestito = c => !hasTag(c.stato_attivita, PERSO_TAG);   // come il Cockpit: tutto tranne i persi
 const incassata = r => r.pagato || !!r.data_incasso;   // su Notion coincidono quasi sempre
 const ymOf = d => d ? d.slice(0, 7) : null;
 
@@ -82,7 +90,7 @@ function contrattiById() {
 // maxDay ('03'…'31'): considera solo i giorni 1..maxDay — serve per confrontare
 // un mese in corso con la STESSA porzione del mese precedente.
 function splitIncassato(m, byId, maxDay) {
-  const t = { tot: 0, n: 0, nuovi: 0, rate: 0, rinnovi: 0, upsell: 0 };
+  const t = { tot: 0, n: 0, nuovi: 0, rate: 0, rinnovi: 0, upsell: 0, nuoviIds: new Set() };
   for (const r of incassi()) {
     if (ymOf(r.data_incasso) !== m) continue;
     if (maxDay && r.data_incasso.slice(8, 10) > maxDay) continue;
@@ -92,7 +100,7 @@ function splitIncassato(m, byId, maxDay) {
     else if (hasTag(r.tipo_contratto, 'UPSELL')) t.upsell += imp;
     else {
       const c = r.id_contratto ? byId.get(r.id_contratto) : null;
-      if (c && ymOf(c.creazione_contratto) === m) t.nuovi += imp;
+      if (c && ymOf(c.creazione_contratto) === m) { t.nuovi += imp; t.nuoviIds.add(r.id_contratto); }
       else t.rate += imp;
     }
   }
@@ -100,7 +108,7 @@ function splitIncassato(m, byId, maxDay) {
 }
 
 function contrattualizzato(m, maxDay) {
-  const t = { tot: 0, n: 0, rinnovi: 0, rinnoviVal: 0, upsell: 0, nuovi: 0 };
+  const t = { tot: 0, n: 0, rinnovi: 0, rinnoviVal: 0, upsell: 0, nuovi: 0, nuoviVal: 0 };
   for (const c of contratti()) {
     if (ymOf(c.creazione_contratto) !== m) continue;
     if (maxDay && c.creazione_contratto.slice(8, 10) > maxDay) continue;
@@ -108,7 +116,7 @@ function contrattualizzato(m, maxDay) {
     t.tot += v; t.n += 1;
     if (hasTag(c.stato, 'RINNOVO')) { t.rinnovi += 1; t.rinnoviVal += v; }
     else if (hasTag(c.stato, 'UPSELL')) t.upsell += 1;
-    else t.nuovi += 1;
+    else { t.nuovi += 1; t.nuoviVal += v; }
   }
   return t;
 }
@@ -160,6 +168,13 @@ function renderKPI() {
     ? (cur >= prev ? '+' : '') + fmt(100 * (cur - prev) / prev) + '% ' + rif + ' (' + eur(prev) + ')'
     : null;
 
+  // commerciale: churn da DATA CLIENTE PERSO · azienda: riempimento come il Cockpit
+  const persiMese = centriRows().filter(x => x.data_cliente_perso && ymOf(x.data_cliente_perso) === MESE).length;
+  const CAP_PM = 35;
+  const gestiti = centriRows().filter(isGestito);
+  const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean)).size;
+  const riemp = nPM > 0 ? gestiti.length / (nPM * CAP_PM) : null;
+
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
       { label: 'Incassato del mese', value: eur(s.tot), hero: true, sub: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
@@ -181,6 +196,24 @@ function renderKPI() {
       { label: 'Già incassato sulle scadenze', value: eur(sc.incassato), sub: fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto' },
       { label: 'Insolute (>7gg)', value: fmtPct(insPct), tone: ins.nonIncassate > 0 ? 'bad' : 'good',
         sub: eur(ins.nonIncassate) + ' mai incassati su ' + eur(ins.scadute) + ' di rate scadute da oltre 7 giorni, fino a ' + ymLabel(MESE) },
+    ] },
+    { step: 4, title: 'Commerciale', tiles: [
+      { label: 'Nuovi clienti', value: fmt(c.nuovi), hero: true, sub: 'contratti nuovi creati nel mese' },
+      { label: 'Clienti rinnovati', value: fmt(c.rinnovi), sub: 'contratti di rinnovo creati nel mese' },
+      { label: 'Upsell effettuati', value: fmt(c.upsell) },
+      { label: 'Clienti persi', value: fmt(persiMese), tone: persiMese > 0 ? 'bad' : 'good',
+        sub: 'segnati persi su Notion nel mese (churn)' },
+      { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), sub: 'valore medio dei contratti nuovi' },
+      { label: 'Ticket medio incassato nuovi', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
+        sub: s.nuoviIds.size + ' nuovi clienti paganti nel mese' },
+    ] },
+    { step: 5, title: 'Azienda', tiles: [
+      { label: 'Riempimento team', value: riemp === null ? '—' : pctFrac(riemp), hero: true,
+        tone: riemp === null ? undefined : (riemp >= 0.95 ? 'bad' : (riemp >= 0.75 ? undefined : 'good')),
+        sub: fmt(gestiti.length) + ' aziende gestite ÷ (' + nPM + ' PM × ' + CAP_PM + ' clienti)' },
+      { label: 'Aziende gestite', value: fmt(gestiti.length), sub: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
+      { label: 'Costi del mese', value: '—', sub: 'fonte costi non ancora collegata' },
+      { label: 'Margine netto', value: '—', sub: 'incassato − costi − rimborsi: serve la fonte costi' },
     ] },
   ]);
 }
