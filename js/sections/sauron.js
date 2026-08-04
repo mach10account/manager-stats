@@ -292,7 +292,7 @@ function renderKPI() {
       tone: x.quota === null ? undefined : (x.quota >= 0.95 ? 'bad' : (x.quota >= 0.75 ? undefined : 'good')),
       sub: x.posti === 0
         ? 'nessuna capienza impostata: falla nella tab Delivery'
-        : fmt(x.assegnati) + ' clienti ÷ ' + fmt(x.posti) + ' posti (' + x.persone + ' persone)'
+        : fmt(x.assegnati) + ' ' + x.baseTxt + ' ÷ ' + fmt(x.posti) + ' posti (' + x.persone + ' persone)'
           + (x.senza > 0 ? ' · ' + fmt(x.senza) + ' senza ' + R.plur : '') };
   };
 
@@ -870,12 +870,19 @@ function renderPnl() {
 // ── tab Delivery ─────────────────────────────────────────────────────────────
 // La capienza NON è più un 35 fisso: si imposta persona per persona nelle tabelle
 // qui sotto (tabella fin_capacita) e da lì escono saturazione e riempimento team.
-const CAP_DEFAULT = 35;                       // usata finché non la imposti a mano
+// base = su cosa si misura il carico di quel ruolo:
+//   'gestiti' → tutti i clienti in gestione (tutti gli stati tranne CLIENTE PERSO/SPARITO)
+//   'attive'  → solo le aziende con stato ADS ATTIVE (è così che ragiona il team beauty)
+const STATO_ATTIVE = 'ADS ATTIVE';
 const RUOLI_CAP = [
-  { key: 'PM',          campo: 'consulente',  label: 'Project manager',   plur: 'project manager' },
-  { key: 'BEAUTY',      campo: 'beauty',      label: 'Beauty specialist', plur: 'beauty specialist' },
-  { key: 'MEDIA_BUYER', campo: 'media_buyer', label: 'Media buyer',       plur: 'media buyer' },
+  { key: 'PM',          campo: 'consulente',  label: 'Project manager',   plur: 'project manager',
+    base: 'gestiti', def: 35, baseTxt: 'clienti in gestione' },
+  { key: 'BEAUTY',      campo: 'beauty',      label: 'Beauty specialist', plur: 'beauty specialist',
+    base: 'attive',  def: 12, baseTxt: 'aziende con ADS ATTIVE' },
+  { key: 'MEDIA_BUYER', campo: 'media_buyer', label: 'Media buyer',       plur: 'media buyer',
+    base: 'gestiti', def: 35, baseTxt: 'clienti in gestione' },
 ];
+const RUOLO = k => RUOLI_CAP.find(x => x.key === k);
 const NON_ASSEGNATO = '(non assegnato)';
 
 let CAP = new Map();                          // "RUOLO|persona" → capienza
@@ -887,19 +894,19 @@ function rebuildCap() {
 }
 const capDi = (ruolo, nome) => {
   const v = CAP.get(ruolo + '|' + nome);
-  return v === undefined ? CAP_DEFAULT : v;
+  return v === undefined ? RUOLO(ruolo).def : v;
 };
 const capImpostata = (ruolo, nome) => CAP.has(ruolo + '|' + nome);
 
 // una riga per persona del ruolo, col suo carico, i suoi rinnovi e la sua capienza
 function caricoPerRuolo(ruolo) {
-  const R = RUOLI_CAP.find(x => x.key === ruolo);
+  const R = RUOLO(ruolo);
   const campo = R.campo;
   const perNome = centriByNome();
   const m = new Map();
   const get = k => {
     let a = m.get(k);
-    if (!a) { a = { pm: k, ruolo, gestiti: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
+    if (!a) { a = { pm: k, ruolo, gestiti: 0, attive: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
     return a;
   };
   const limite12m = addYm(dstr(todayRome()).slice(0, 7), -11) + '-01';
@@ -908,6 +915,7 @@ function caricoPerRuolo(ruolo) {
     const a = get(c[campo] || NON_ASSEGNATO);
     if (isGestito(c)) {
       a.gestiti += 1;
+      if (hasTag(c.stato_attivita, STATO_ATTIVE)) a.attive += 1;
       if (hasTag(c.stato_attivita, 'ONBOARDING')) a.onboarding += 1;
       if (hasTag(c.stato_attivita, 'IN ATTESA DI RINNOVO')) a.attesaRinnovo += 1;
     }
@@ -925,21 +933,23 @@ function caricoPerRuolo(ruolo) {
     get((an && an[campo]) || (campo === 'consulente' && r.consulente) || NON_ASSEGNATO).incassato += (+r.importo || 0);
   }
   return [...m.values()].map(a => {
+    a.carico = R.base === 'attive' ? a.attive : a.gestiti;   // su cosa si misura la capienza
     a.capacita = a.pm === NON_ASSEGNATO ? null : capDi(ruolo, a.pm);
-    a.saturazione = a.capacita > 0 ? a.gestiti / a.capacita * 100 : null;
+    a.saturazione = a.capacita > 0 ? a.carico / a.capacita * 100 : null;
     a.perCliente = a.gestiti > 0 ? a.incassato / a.gestiti : null;
     return a;
   });
 }
 
-// riempimento del ruolo = clienti assegnati ÷ somma delle capienze delle persone
+// riempimento del ruolo = carico assegnato ÷ somma delle capienze delle persone
 function riempimentoRuolo(ruolo) {
+  const R = RUOLO(ruolo);
   const righe = caricoPerRuolo(ruolo);
   const persone = righe.filter(r => r.pm !== NON_ASSEGNATO && (r.gestiti > 0 || capImpostata(ruolo, r.pm)));
   const posti = persone.reduce((a, r) => a + (r.capacita || 0), 0);
-  const assegnati = persone.reduce((a, r) => a + r.gestiti, 0);
-  const senza = righe.filter(r => r.pm === NON_ASSEGNATO).reduce((a, r) => a + r.gestiti, 0);
-  return { ruolo, persone: persone.length, posti, assegnati, senza,
+  const assegnati = persone.reduce((a, r) => a + r.carico, 0);
+  const senza = righe.filter(r => r.pm === NON_ASSEGNATO).reduce((a, r) => a + r.carico, 0);
+  return { ruolo, base: R.base, baseTxt: R.baseTxt, persone: persone.length, posti, assegnati, senza,
            quota: posti > 0 ? assegnati / posti : null };
 }
 
@@ -948,16 +958,18 @@ const capCol = {
   fmt: (v, r) => r.pm === NON_ASSEGNATO ? '—'
     : `<input type="number" class="cap-inp" min="0" max="1000" step="1" value="${v}"
         data-ruolo="${esc(r.ruolo)}" data-nome="${esc(r.pm)}"
-        title="Quanti clienti può seguire ${esc(r.pm)}">`,
+        title="Quante ${esc(RUOLO(r.ruolo).baseTxt)} può seguire ${esc(r.pm)}">`,
 };
 const colsRuolo = ruolo => {
-  const R = RUOLI_CAP.find(x => x.key === ruolo);
+  const R = RUOLO(ruolo);
   const cols = [
     { key: 'pm', label: R.label },
     { key: 'gestiti', label: 'Clienti gestiti', fmt },
+    { key: 'attive', label: 'Con ADS attive', fmt },
     capCol,
-    { key: 'saturazione', label: 'Saturazione', fmt: v => v === null ? '—'
-      : `<span class="${v >= 95 ? 'val-bad' : (v >= 75 ? '' : 'val-good')}">${fmtPct(v)}</span>` },
+    { key: 'saturazione', label: R.base === 'attive' ? 'Saturazione (su ADS attive)' : 'Saturazione',
+      fmt: v => v === null ? '—'
+        : `<span class="${v >= 95 ? 'val-bad' : (v >= 75 ? '' : 'val-good')}">${fmtPct(v)}</span>` },
     { key: 'onboarding', label: 'In onboarding', fmt },
     { key: 'attesaRinnovo', label: 'In attesa rinnovo', fmt },
     { key: 'rinnovi', label: 'Rinnovi firmati', fmt },
@@ -1028,12 +1040,13 @@ function renderDelivery() {
     ${RUOLI_CAP.map(R => `
     <div class="card">
       <h2>Carico per ${R.plur}</h2>
-      <div class="subtitle">Clienti in gestione (tutti gli stati tranne CLIENTE PERSO/SPARITO) e saturazione sulla
-        <strong>capienza che imposti tu</strong> nella colonna a fianco: si salva da sola e vale anche per il
-        riempimento team in Dashboard. Finché non la tocchi vale ${CAP_DEFAULT}.
+      <div class="subtitle">La <strong>capienza la imposti tu</strong> nella colonna a fianco: si salva da sola e vale
+        anche per il riempimento team in Dashboard. Finché non la tocchi vale ${R.def}.
+        La saturazione è calcolata sulle <strong>${R.baseTxt}</strong>${R.base === 'attive'
+          ? ' (stato ADS ATTIVE su Notion), non su tutti i clienti seguiti' : ' (tutti gli stati tranne CLIENTE PERSO/SPARITO)'}.
         ${R.key === 'PM' ? 'Rinnovi e incassato sono attribuiti al PM del centro (join per nome del centro).'
           : 'Rinnovi attribuiti alla persona assegnata al centro.'}
-        ${riemp[R.key].senza > 0 ? `<strong>${fmt(riemp[R.key].senza)} clienti gestiti non hanno un ${R.plur} assegnato</strong> su Notion.` : ''}</div>
+        ${riemp[R.key].senza > 0 ? `<strong>${fmt(riemp[R.key].senza)} ${R.baseTxt} non hanno un ${R.plur} assegnato</strong> su Notion.` : ''}</div>
       <div class="table-scroll"><table id="fnRuolo${R.key}"></table></div>
     </div>`).join('')}
 
@@ -1387,10 +1400,11 @@ function renderReport() {
         <li><b>EBITDA</b>: ricavi netti − costi correnti − commissioni, <b>esclusi</b> investimenti e asset.
           <b>Cash flow / margine netto</b>: EBITDA meno gli investimenti.</li>
         <li><b>Clienti persi</b>: DATA CLIENTE PERSO su Notion DATABASE CLIENTI, nel mese.</li>
-        <li><b>Riempimento team</b>: clienti assegnati ÷ somma delle <b>capienze che imposti tu</b> nella tab Delivery,
-          una per persona e per ruolo (project manager, beauty specialist, media buyer). Finché una capienza non viene
-          impostata vale ${CAP_DEFAULT}. Al numeratore ci sono solo i clienti in gestione che hanno quella persona
-          assegnata su Notion: i clienti senza ruolo assegnato sono contati a parte nel sottotitolo della tile.</li>
+        <li><b>Riempimento team</b>: carico assegnato ÷ somma delle <b>capienze che imposti tu</b> nella tab Delivery,
+          una per persona. Il carico cambia col ruolo: per <b>project manager</b> e <b>media buyer</b> sono tutti i
+          clienti in gestione (default 35 a testa); per le <b>beauty specialist</b> sono solo le aziende con stato
+          <b>ADS ATTIVE</b> (default 12 a testa), perché è su quelle che lavorano. Al numeratore contano solo i clienti
+          con quella persona assegnata su Notion: quelli senza sono dichiarati a parte nel sottotitolo della tile.</li>
         <li><b>Confronto col mese prima</b>: se il mese è in corso, il precedente viene tagliato allo stesso giorno,
           altrimenti il confronto sarebbe sempre in perdita.</li>
       </ul>
