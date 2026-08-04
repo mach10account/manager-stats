@@ -10,8 +10,8 @@
 //
 // Definizioni (dal Cockpit, adattate ai dati Notion):
 // · Incassato del mese  = somma IMPORTO RATA con DATA INCASSO nel mese
-// · Nuovi clienti       = incassi il cui contratto è stato creato nello stesso mese
-//                         (join via ID CONTRATTO) e non è RINNOVO/UPSELL
+// · 1ª rata pagata     = rate con RATA NUMERO 1 e DATA INCASSO nel mese, che non
+//                         siano RINNOVO/UPSELL: i clienti che partono davvero
 // · Rinnovi / Upsell    = tag esatto 'RINNOVO' / 'UPSELL' (match sull'elemento:
 //                         "CONTRATTO TERMINATO CON RINNOVO" NON è un rinnovo)
 // · Contrattualizzato   = somma VALORE CONTRATTO dei contratti creati nel mese
@@ -115,22 +115,19 @@ function agenzie() {
   return [...s].sort();
 }
 
-function contrattiById() {
-  const m = new Map();
-  for (const c of DATA.contratti) if (c.id_contratto && !m.has(c.id_contratto)) m.set(c.id_contratto, c);
-  return m;
-}
-
 function centriByNome() {
   const m = new Map();
   for (const c of centriRows()) if (c.nome) m.set(chiave(c.nome), c);
   return m;
 }
 
-// incassato del mese, spezzato in nuovi / rate / rinnovi / upsell.
+// incassato del mese, spezzato in prime rate / rate successive / rinnovi / upsell.
+// "prima rata" = RATA NUMERO 1 incassata nel mese (su Notion e' la riga con
+// NUMERO RATA INCASSATA = 1): e' il cliente che parte davvero, a prescindere da
+// quando ha firmato. Rinnovi e upsell restano fuori: non sono clienti nuovi.
 // maxDay ('03'…'31'): considera solo i giorni 1..maxDay — serve per confrontare
 // un mese in corso con la STESSA porzione del mese precedente.
-function splitIncassato(m, byId, maxDay) {
+function splitIncassato(m, maxDay) {
   const t = { tot: 0, n: 0, nuovi: 0, rate: 0, rinnovi: 0, upsell: 0, nuoviIds: new Set() };
   for (const r of incassi()) {
     if (ymOf(r.data_incasso) !== m) continue;
@@ -139,11 +136,11 @@ function splitIncassato(m, byId, maxDay) {
     t.tot += imp; t.n += 1;
     if (hasTag(r.tipo_contratto, 'RINNOVO')) t.rinnovi += imp;
     else if (hasTag(r.tipo_contratto, 'UPSELL')) t.upsell += imp;
-    else {
-      const c = r.id_contratto ? byId.get(r.id_contratto) : null;
-      if (c && ymOf(c.creazione_contratto) === m) { t.nuovi += imp; t.nuoviIds.add(r.id_contratto); }
-      else t.rate += imp;
+    else if (+r.rata_numero === 1) {
+      t.nuovi += imp;
+      t.nuoviIds.add(r.id_contratto || r.centro || r.id_incasso);
     }
+    else t.rate += imp;
   }
   return t;
 }
@@ -240,8 +237,7 @@ function costiMese(m) {
 
 // conto economico per cassa del mese
 function pnl(m) {
-  const byId = contrattiById();
-  const s = splitIncassato(m, byId);
+  const s = splitIncassato(m);
   const cm = costiMese(m);
   const ricaviNetti = s.tot - cm.rimborsi;
   const costiDiretti = cm.comm.tot + cm.cat.Diretti;
@@ -260,13 +256,12 @@ function pnl(m) {
 
 // ── KPI dashboard ────────────────────────────────────────────────────────────
 function renderKPI() {
-  const byId = contrattiById();
   // mese in corso = confronto ad armi pari: il mese prima viene tagliato allo
   // stesso giorno (1–3 ago vs 1–3 lug). Mesi chiusi = mese pieno vs mese pieno.
   const oggi = dstr(todayRome());
   const maxDay = MESE === oggi.slice(0, 7) ? oggi.slice(8, 10) : null;
-  const s = splitIncassato(MESE, byId);
-  const sPrev = splitIncassato(addYm(MESE, -1), byId, maxDay);
+  const s = splitIncassato(MESE);
+  const sPrev = splitIncassato(addYm(MESE, -1), maxDay);
   const c = contrattualizzato(MESE);
   const cPrev = contrattualizzato(addYm(MESE, -1), maxDay);
   const sc = scadenze(MESE);
@@ -291,7 +286,8 @@ function renderKPI() {
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
       { label: 'Incassato del mese', value: eur(s.tot), hero: true, sub: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
-      { label: 'Nuovi clienti', value: eur(s.nuovi), sub: 'contratti firmati nel mese' },
+      { label: 'Clienti che hanno pagato la 1ª rata', value: eur(s.nuovi),
+        sub: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente' : ' clienti') + ' partiti nel mese' },
       { label: 'Rate', value: eur(s.rate), sub: 'rate successive di clienti attivi' },
       { label: 'Rinnovi', value: eur(s.rinnovi), sub: 'tag RINNOVO sul contratto' },
       { label: 'Upsell', value: eur(s.upsell) },
@@ -317,8 +313,8 @@ function renderKPI() {
       { label: 'Clienti persi', value: fmt(persiMese), tone: persiMese > 0 ? 'bad' : 'good',
         sub: 'segnati persi su Notion nel mese (churn)' },
       { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), sub: 'valore medio dei contratti nuovi' },
-      { label: 'Ticket medio incassato nuovi', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
-        sub: s.nuoviIds.size + ' nuovi clienti paganti nel mese' },
+      { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
+        sub: s.nuoviIds.size + ' clienti hanno pagato la prima rata nel mese' },
     ] },
     { step: 5, title: 'Azienda', tiles: [
       { label: 'Riempimento team', value: riemp === null ? '—' : pctFrac(riemp), hero: true,
@@ -744,7 +740,7 @@ function renderPnl() {
         <tbody>
           ${testa('Ricavi — cash incassato')}
           ${riga('Cash incassato (totale)', x => x.lordi, { cls: 'fn-tot' })}
-          ${riga('di cui: nuovi clienti', x => x.s.nuovi, { indent: true })}
+          ${riga('di cui: prime rate (nuovi clienti)', x => x.s.nuovi, { indent: true })}
           ${riga('di cui: rate successive', x => x.s.rate, { indent: true })}
           ${riga('di cui: rinnovi', x => x.s.rinnovi, { indent: true })}
           ${riga('di cui: upsell', x => x.s.upsell, { indent: true })}
@@ -1171,7 +1167,7 @@ const EXPORT = {
       nome: 'pnl_12_mesi_al_' + MESE + '.csv',
       righe: [['Voce'].concat(ms.map(d => d.m)),
         riga('Cash incassato', d => d.lordi),
-        riga('di cui nuovi clienti', d => d.s.nuovi),
+        riga('di cui prime rate (nuovi clienti)', d => d.s.nuovi),
         riga('di cui rate', d => d.s.rate),
         riga('di cui rinnovi', d => d.s.rinnovi),
         riga('di cui upsell', d => d.s.upsell),
@@ -1221,9 +1217,11 @@ function renderReport() {
         <li><b>Incassato</b>: somma di IMPORTO RATA delle righe con DATA INCASSO nel mese (Notion DATABASE INCASSI).
           Una rata conta come incassata se ha la data di incasso o la spunta PAGATO.</li>
         <li><b>Contrattualizzato</b>: somma di VALORE CONTRATTO dei contratti creati nel mese
-          (DATABASE VALORE CONTRATTI), per data di creazione.</li>
-        <li><b>Nuovi / rate / rinnovi / upsell</b>: un incasso è "nuovo cliente" se il suo contratto è stato creato
-          nello stesso mese; rinnovi e upsell seguono il tag esatto sul contratto.</li>
+          (Notion DATABASE CONTRATTI), per data di creazione. Una riga = un contratto.</li>
+        <li><b>Clienti che hanno pagato la 1ª rata</b>: rate con RATA NUMERO 1 incassate nel mese
+          (su Notion la riga ha NUMERO RATA INCASSATA = 1), escluse quelle di rinnovi e upsell.
+          Conta quando il cliente <i>parte</i>, non quando firma: se firma a giugno e paga a luglio, sta in luglio.
+          Le <b>rate</b> sono tutte le successive alla prima; rinnovi e upsell seguono il tag esatto sul contratto.</li>
         <li><b>Commissioni</b>: formule di Notion sulla singola rata (venditore 10%, setter 5%, PM/MB/BS sui rinnovi),
           sommate sugli incassi del mese. Non sono stime.</li>
         <li><b>Costi</b>: registro interno (tab Costi). Una voce mensile conta da <i>data inizio</i> in poi,
