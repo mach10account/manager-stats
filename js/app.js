@@ -75,7 +75,14 @@ function showLogin() {
 async function showApp() {
   $('login').classList.add('hidden');
   $('shell').classList.remove('hidden');
-  if (!accessTracked) { accessTracked = true; track('ACCESSO'); }
+  if (!accessTracked) {
+    accessTracked = true;
+    track('ACCESSO');
+    // timbro di presenza per la colonna "Ultimo accesso" del pannello Accessi:
+    // auth.users.last_sign_in_at si muove solo al reinserimento della password,
+    // e chi resta loggato non la muove mai più (migration 37).
+    supabase.rpc('ms_ping').then(() => {}, () => {});
+  }
   if (!booted) {
     booted = true;
     bootPromise = boot();

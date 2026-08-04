@@ -21,8 +21,19 @@ let CONSULENTI = [];   // email distinte da centri.consulente
 let MEDIA_BUYER = [];  // email distinte da centri.media_buyer
 let _mount = null;
 
-const dataLeggibile = iso => !iso ? 'mai' :
-  new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: '2-digit' });
+// "Ultimo accesso" = ultimo USO (ping dell'app / rinnovo sessione / login), non
+// solo l'ultimo inserimento di password — vedi migration 37.
+const dataLeggibile = iso => {
+  if (!iso) return 'mai';
+  const d = new Date(iso);
+  const ora = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  const giorno = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
+  const scarto = Math.round((oggi - giorno) / 86400000);
+  if (scarto === 0) return 'oggi ' + ora;
+  if (scarto === 1) return 'ieri ' + ora;
+  return d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: '2-digit' });
+};
 
 // modalità visibilità: '' = tutti · 'c:<email>' = centri del consulente
 // · 'm:<email>' = centri del media buyer · 'picker' = allowlist esplicita
