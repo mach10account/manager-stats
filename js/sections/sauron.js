@@ -871,16 +871,21 @@ function renderPnl() {
 // La capienza NON è più un 35 fisso: si imposta persona per persona nelle tabelle
 // qui sotto (tabella fin_capacita) e da lì escono saturazione e riempimento team.
 // base = su cosa si misura il carico di quel ruolo:
-//   'gestiti' → tutti i clienti in gestione (tutti gli stati tranne CLIENTE PERSO/SPARITO)
-//   'attive'  → solo le aziende con stato ADS ATTIVE (è così che ragiona il team beauty)
+//   'operativo' → portafoglio operativo: i clienti su cui si lavora davvero adesso
+//                 (esclude spostati a estetista indipendente, riparte a settembre,
+//                  standby e quelli senza stato: sono parcheggiati, non carico)
+//   'attive'    → solo le aziende con ADS ATTIVE (le beauty lavorano solo quelle)
+//   'gestiti'   → tutti i clienti non persi (portafoglio assegnato, non carico)
 const STATO_ATTIVE = 'ADS ATTIVE';
+const STATI_OPERATIVI = ['ADS ATTIVE', 'ADS DA LANCIARE', 'ONBOARDING', 'IN ATTESA DI RINNOVO',
+                         'OPEN DAY', 'GESTIONE SOCIAL'];
 const RUOLI_CAP = [
   { key: 'PM',          campo: 'consulente',  label: 'Project manager',   plur: 'project manager',
-    base: 'gestiti', def: 35, baseTxt: 'clienti in gestione' },
+    base: 'operativo', def: 35, baseTxt: 'clienti nel portafoglio operativo' },
   { key: 'BEAUTY',      campo: 'beauty',      label: 'Beauty specialist', plur: 'beauty specialist',
-    base: 'attive',  def: 12, baseTxt: 'aziende con ADS ATTIVE' },
+    base: 'attive',    def: 12, baseTxt: 'aziende con ADS ATTIVE' },
   { key: 'MEDIA_BUYER', campo: 'media_buyer', label: 'Media buyer',       plur: 'media buyer',
-    base: 'gestiti', def: 35, baseTxt: 'clienti in gestione' },
+    base: 'operativo', def: 35, baseTxt: 'clienti nel portafoglio operativo' },
 ];
 const RUOLO = k => RUOLI_CAP.find(x => x.key === k);
 const NON_ASSEGNATO = '(non assegnato)';
@@ -906,7 +911,7 @@ function caricoPerRuolo(ruolo) {
   const m = new Map();
   const get = k => {
     let a = m.get(k);
-    if (!a) { a = { pm: k, ruolo, gestiti: 0, attive: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
+    if (!a) { a = { pm: k, ruolo, gestiti: 0, attive: 0, operativi: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
     return a;
   };
   const limite12m = addYm(dstr(todayRome()).slice(0, 7), -11) + '-01';
@@ -916,6 +921,7 @@ function caricoPerRuolo(ruolo) {
     if (isGestito(c)) {
       a.gestiti += 1;
       if (hasTag(c.stato_attivita, STATO_ATTIVE)) a.attive += 1;
+      if (STATI_OPERATIVI.some(s => hasTag(c.stato_attivita, s))) a.operativi += 1;
       if (hasTag(c.stato_attivita, 'ONBOARDING')) a.onboarding += 1;
       if (hasTag(c.stato_attivita, 'IN ATTESA DI RINNOVO')) a.attesaRinnovo += 1;
     }
@@ -933,7 +939,8 @@ function caricoPerRuolo(ruolo) {
     get((an && an[campo]) || (campo === 'consulente' && r.consulente) || NON_ASSEGNATO).incassato += (+r.importo || 0);
   }
   return [...m.values()].map(a => {
-    a.carico = R.base === 'attive' ? a.attive : a.gestiti;   // su cosa si misura la capienza
+    // su cosa si misura la capienza di questo ruolo
+    a.carico = R.base === 'attive' ? a.attive : (R.base === 'operativo' ? a.operativi : a.gestiti);
     a.capacita = a.pm === NON_ASSEGNATO ? null : capDi(ruolo, a.pm);
     a.saturazione = a.capacita > 0 ? a.carico / a.capacita * 100 : null;
     a.perCliente = a.gestiti > 0 ? a.incassato / a.gestiti : null;
@@ -965,9 +972,11 @@ const colsRuolo = ruolo => {
   const cols = [
     { key: 'pm', label: R.label },
     { key: 'gestiti', label: 'Clienti gestiti', fmt },
+    { key: 'operativi', label: 'Portafoglio operativo', fmt },
     { key: 'attive', label: 'Con ADS attive', fmt },
     capCol,
-    { key: 'saturazione', label: R.base === 'attive' ? 'Saturazione (su ADS attive)' : 'Saturazione',
+    { key: 'saturazione', label: R.base === 'attive' ? 'Saturazione (su ADS attive)'
+        : (R.base === 'operativo' ? 'Saturazione (su portafoglio operativo)' : 'Saturazione'),
       fmt: v => v === null ? '—'
         : `<span class="${v >= 95 ? 'val-bad' : (v >= 75 ? '' : 'val-good')}">${fmtPct(v)}</span>` },
     { key: 'onboarding', label: 'In onboarding', fmt },
@@ -1042,8 +1051,12 @@ function renderDelivery() {
       <h2>Carico per ${R.plur}</h2>
       <div class="subtitle">La <strong>capienza la imposti tu</strong> nella colonna a fianco: si salva da sola e vale
         anche per il riempimento team in Dashboard. Finché non la tocchi vale ${R.def}.
-        La saturazione è calcolata sulle <strong>${R.baseTxt}</strong>${R.base === 'attive'
-          ? ' (stato ADS ATTIVE su Notion), non su tutti i clienti seguiti' : ' (tutti gli stati tranne CLIENTE PERSO/SPARITO)'}.
+        La saturazione è calcolata sui <strong>${R.baseTxt}</strong>${R.base === 'attive'
+          ? ' (stato ADS ATTIVE su Notion), non su tutti i clienti seguiti'
+          : (R.base === 'operativo'
+            ? ` — ${STATI_OPERATIVI.join(', ')} — cioè i clienti su cui si lavora adesso: restano fuori
+                spostati a estetista indipendente, riparte a settembre, standby e quelli senza stato`
+            : ' (tutti gli stati tranne CLIENTE PERSO/SPARITO)')}.
         ${R.key === 'PM' ? 'Rinnovi e incassato sono attribuiti al PM del centro (join per nome del centro).'
           : 'Rinnovi attribuiti alla persona assegnata al centro.'}
         ${riemp[R.key].senza > 0 ? `<strong>${fmt(riemp[R.key].senza)} ${R.baseTxt} non hanno un ${R.plur} assegnato</strong> su Notion.` : ''}</div>
@@ -1401,10 +1414,13 @@ function renderReport() {
           <b>Cash flow / margine netto</b>: EBITDA meno gli investimenti.</li>
         <li><b>Clienti persi</b>: DATA CLIENTE PERSO su Notion DATABASE CLIENTI, nel mese.</li>
         <li><b>Riempimento team</b>: carico assegnato ÷ somma delle <b>capienze che imposti tu</b> nella tab Delivery,
-          una per persona. Il carico cambia col ruolo: per <b>project manager</b> e <b>media buyer</b> sono tutti i
-          clienti in gestione (default 35 a testa); per le <b>beauty specialist</b> sono solo le aziende con stato
-          <b>ADS ATTIVE</b> (default 12 a testa), perché è su quelle che lavorano. Al numeratore contano solo i clienti
-          con quella persona assegnata su Notion: quelli senza sono dichiarati a parte nel sottotitolo della tile.</li>
+          una per persona. Il carico cambia col ruolo: per <b>project manager</b> e <b>media buyer</b> è il
+          <b>portafoglio operativo</b> (ADS ATTIVE, ADS DA LANCIARE, ONBOARDING, IN ATTESA DI RINNOVO, OPEN DAY,
+          GESTIONE SOCIAL — default 35 a testa); per le <b>beauty specialist</b> sono le sole aziende con
+          <b>ADS ATTIVE</b> (default 12). Restano fuori dal carico i clienti parcheggiati — spostati a estetista
+          indipendente, riparte a settembre, standby, senza stato — che invece sono dentro "clienti gestiti".
+          Al numeratore contano solo i clienti con quella persona assegnata su Notion: quelli senza sono
+          dichiarati a parte nel sottotitolo della tile.</li>
         <li><b>Confronto col mese prima</b>: se il mese è in corso, il precedente viene tagliato allo stesso giorno,
           altrimenti il confronto sarebbe sempre in perdita.</li>
       </ul>
