@@ -386,7 +386,11 @@ function trendRows() {
     const m = ymOf(c.creazione_contratto);
     if (m !== null && con.has(m)) { con.set(m, con.get(m) + (+c.valore || 0)); nCon.set(m, nCon.get(m) + 1); }
   }
-  return { months, rows: months.map(m => ({ incassato: inc.get(m), contrattualizzato: con.get(m), n: nCon.get(m) })) };
+  return { months, rows: months.map(m => {
+    const p = pnl(m);                      // EBITDA del mese: stesso calcolo del P&L
+    return { incassato: inc.get(m), contrattualizzato: con.get(m), n: nCon.get(m),
+             ebitda: p.ebitda, costi: p.cm.tot, rimborsi: p.rimborsi };
+  }) };
 }
 
 function renderTrend() {
@@ -396,11 +400,14 @@ function renderTrend() {
   renderLineChart(el, months, rows, [
     { key: 'incassato', color: '--series-1', name: 'Incassato' },
     { key: 'contrattualizzato', color: '--series-2', name: 'Contrattualizzato' },
+    { key: 'ebitda', color: '--series-3', name: 'EBITDA' },
   ], {
     xlab: ymShort, yfmt: eur, height: 280,
     tip: (r, m) => `<div class="t-date">${ymLabel(m)}</div>
       <div class="t-row"><span>Incassato</span><b>${eur(r.incassato)}</b></div>
       <div class="t-row"><span>Contrattualizzato</span><b>${eur(r.contrattualizzato)}</b></div>
+      <div class="t-row"><span>EBITDA</span><b>${eur(r.ebitda)}</b></div>
+      <div class="t-row"><span>Costi del mese</span><b>${eur(r.costi)}</b></div>
       <div class="t-row"><span>Contratti firmati</span><b>${fmt(r.n)}</b></div>`,
   });
 }
@@ -522,11 +529,14 @@ const DASH_HTML = `
 
   <div class="card">
     <h2>Andamento mensile</h2>
-    <div class="subtitle">Ultimi 12 mesi fino a <span id="fnMeseLabel"></span>: incassato (per data incasso)
-      e contrattualizzato (per data di creazione del contratto).</div>
+    <div class="subtitle">Ultimi 12 mesi fino a <span id="fnMeseLabel"></span>: incassato (per data incasso),
+      contrattualizzato (per data di creazione del contratto) ed EBITDA (incassato netto − costi correnti −
+      commissioni, esclusi investimenti e asset). Se l'EBITDA va sotto zero la scala scende con lui e compare
+      la linea tratteggiata dello zero.</div>
     <div class="legend">
       <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Incassato</span>
       <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Contrattualizzato</span>
+      <span class="key"><span class="swatch" style="background:var(--series-3)"></span>EBITDA</span>
     </div>
     <div class="chart-wrap"><svg id="fnTrend" width="100%" height="280"></svg></div>
   </div>

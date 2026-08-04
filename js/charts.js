@@ -36,14 +36,19 @@ export function renderLineChart(svg, labels, rows, series, opts = {}) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   if (!labels.length) { emptyMsg(svg, W, H); return; }
 
-  const maxY = Math.max(...rows.flatMap(r => series.map(s => +r[s.key] || 0)), opts.minMax || 5);
+  const vals = rows.flatMap(r => series.map(s => +r[s.key] || 0));
+  const maxY = Math.max(...vals, opts.minMax || 5);
+  // se una serie va sotto zero (es. EBITDA in perdita) la scala scende con lei,
+  // altrimenti la linea uscirebbe dal grafico. Con soli valori positivi minY = 0
+  // e il disegno resta identico a prima.
+  const minY = Math.min(0, ...vals);
   const x = i => padL + (labels.length === 1 ? (W - padL - padR) / 2 : i * (W - padL - padR) / (labels.length - 1));
-  const y = v => padT + (H - padT - padB) * (1 - (+v || 0) / maxY);
+  const y = v => padT + (H - padT - padB) * (1 - ((+v || 0) - minY) / (maxY - minY));
 
   let g = '';
   const steps = 4;
   for (let i = 0; i <= steps; i++) {
-    const v = maxY * i / steps, yy = y(v);
+    const v = minY + (maxY - minY) * i / steps, yy = y(v);
     g += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="${cssv('--grid')}" stroke-width="1"/>`;
     g += `<text x="${padL - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="${cssv('--muted')}">${axisFmt(v)}</text>`;
   }
@@ -51,11 +56,17 @@ export function renderLineChart(svg, labels, rows, series, opts = {}) {
   labels.forEach((d, i) => {
     if (i % nlab === 0) g += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="${cssv('--muted')}">${xlab(d)}</text>`;
   });
+  // linea dello zero, quando la scala scende sotto (serve a leggere le perdite)
+  if (minY < 0) {
+    g += `<line x1="${padL}" y1="${y(0).toFixed(1)}" x2="${W - padR}" y2="${y(0).toFixed(1)}"
+           stroke="${cssv('--muted')}" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>`;
+  }
   // area soffusa sotto la prima serie (solo estetica, la linea resta l'encoding)
   if (opts.area !== false && series.length && labels.length > 1) {
     const s0 = series[0];
+    const base = y(0).toFixed(1);
     const area = rows.map((r, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(r[s0.key]).toFixed(1)).join(' ')
-      + ` L ${x(labels.length - 1).toFixed(1)} ${H - padB} L ${x(0).toFixed(1)} ${H - padB} Z`;
+      + ` L ${x(labels.length - 1).toFixed(1)} ${base} L ${x(0).toFixed(1)} ${base} Z`;
     g += `<path d="${area}" fill="${cssv(s0.color)}" fill-opacity="0.08" stroke="none"/>`;
   }
   for (const s of series) {
