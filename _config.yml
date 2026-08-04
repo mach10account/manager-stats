@@ -1,0 +1,18 @@
+# Configurazione della build GitHub Pages (Jekyll, build_type "legacy").
+#
+# ⚠️ Il motivo per cui questo file esiste: Pages pubblica la sorgente `main:/`,
+# cioè serve come SITO l'intero repository — cartella migrations/ compresa. Le
+# migration contenevano il registro costi (nomi e compensi del personale) e
+# l'elenco delle email con i permessi: erano scaricabili da chiunque, senza
+# account, su https://mach10account.github.io/manager-stats/migrations/*.sql
+#
+# `exclude` toglie questi percorsi dal sito costruito. NON li toglie dal
+# repository: finché il repo è pubblico restano leggibili su github.com e su
+# raw.githubusercontent.com, e restano comunque nella storia dei commit.
+#
+# NB: rendere il repo privato NON basterebbe da solo — un sito Pages resta
+# pubblico su internet anche quando il repository è privato (i siti Pages
+# privati richiedono Enterprise Cloud, non Pro).
+exclude:
+  - migrations
+  - README.md

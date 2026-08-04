@@ -59,13 +59,13 @@ const TABS = [
 let centroSort = { key: 'incassato', dir: -1 };
 let contrattiSort = { key: 'valore', dir: -1 };
 let insSort = { key: 'data_scadenza', dir: 1 };
-let pmSort = { key: 'gestiti', dir: -1 };
+let ruoloSort = { PM: { key: 'gestiti', dir: -1 }, BEAUTY: { key: 'gestiti', dir: -1 }, MEDIA_BUYER: { key: 'gestiti', dir: -1 } };
 let ltvSort = { key: 'incassato', dir: -1 };
 const costiSort = {};                        // per reparto
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData() {
-  const [incassi, contratti, centri, costi] = await Promise.all([
+  const [incassi, contratti, centri, costi, capacita] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('fin_incassi')
       .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo,comm_venditore,comm_setter,comm_pm,comm_mb,comm_bs')
       .range(lo, hi)),
@@ -75,9 +75,10 @@ async function buildData() {
       .select('nome_centro,id_contratto,valore,stato,durata,agenzia,venditore,creazione_contratto')
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('centri')
-      .select('nome,agenzia,stato_attivita,consulente,beauty,data_cliente_perso,inizio_servizio,fine_servizio,data_rinnovo')
+      .select('nome,agenzia,stato_attivita,consulente,beauty,media_buyer,data_cliente_perso,inizio_servizio,fine_servizio,data_rinnovo')
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi)),
+    fetchAll((lo, hi) => supabase.from('fin_capacita').select('*').range(lo, hi)),
   ]);
   // dal mirror il venditore arriva come array e il valore come numeric (stringa via
   // PostgREST): qui li riporto alle forme che il resto della sezione si aspetta.
@@ -86,7 +87,7 @@ async function buildData() {
     valore: (c.valore === null || c.valore === undefined) ? null : Number(c.valore),
     venditore: Array.isArray(c.venditore) ? c.venditore.join(', ') : c.venditore,
   }));
-  return { incassi, contratti: contrattiNorm, centri, costi };
+  return { incassi, contratti: contrattiNorm, centri, costi, capacita };
 }
 
 async function ricaricaCosti() {
@@ -857,22 +858,44 @@ function renderPnl() {
 }
 
 // ── tab Delivery ─────────────────────────────────────────────────────────────
-const CAP_PM = 35;
+// La capienza NON è più un 35 fisso: si imposta persona per persona nelle tabelle
+// qui sotto (tabella fin_capacita) e da lì escono saturazione e riempimento team.
+const CAP_DEFAULT = 35;                       // usata finché non la imposti a mano
+const RUOLI_CAP = [
+  { key: 'PM',          campo: 'consulente',  label: 'Project manager',   plur: 'project manager' },
+  { key: 'BEAUTY',      campo: 'beauty',      label: 'Beauty specialist', plur: 'beauty specialist' },
+  { key: 'MEDIA_BUYER', campo: 'media_buyer', label: 'Media buyer',       plur: 'media buyer' },
+];
+const NON_ASSEGNATO = '(non assegnato)';
 
-// una riga per PM (consulente) con il suo carico e i suoi rinnovi
-function deliveryPerPm() {
+let CAP = new Map();                          // "RUOLO|persona" → capienza
+function rebuildCap() {
+  CAP = new Map();
+  for (const c of (DATA && DATA.capacita ? DATA.capacita : [])) {
+    CAP.set(c.ruolo + '|' + c.nome, +c.capacita || 0);
+  }
+}
+const capDi = (ruolo, nome) => {
+  const v = CAP.get(ruolo + '|' + nome);
+  return v === undefined ? CAP_DEFAULT : v;
+};
+const capImpostata = (ruolo, nome) => CAP.has(ruolo + '|' + nome);
+
+// una riga per persona del ruolo, col suo carico, i suoi rinnovi e la sua capienza
+function caricoPerRuolo(ruolo) {
+  const R = RUOLI_CAP.find(x => x.key === ruolo);
+  const campo = R.campo;
   const perNome = centriByNome();
   const m = new Map();
   const get = k => {
     let a = m.get(k);
-    if (!a) { a = { pm: k, gestiti: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
+    if (!a) { a = { pm: k, ruolo, gestiti: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
     return a;
   };
   const limite12m = addYm(dstr(todayRome()).slice(0, 7), -11) + '-01';
 
   for (const c of centriRows()) {
-    const k = c.consulente || '(non assegnato)';
-    const a = get(k);
+    const a = get(c[campo] || NON_ASSEGNATO);
     if (isGestito(c)) {
       a.gestiti += 1;
       if (hasTag(c.stato_attivita, 'ONBOARDING')) a.onboarding += 1;
@@ -880,35 +903,71 @@ function deliveryPerPm() {
     }
     if (c.data_cliente_perso && c.data_cliente_perso >= limite12m) a.persi12m += 1;
   }
-  // rinnovi e incassato si attribuiscono al PM del centro (join per nome)
+  // rinnovi e incassato si attribuiscono alla persona del centro (join per nome)
   for (const c of contratti()) {
     if (!hasTag(c.stato, 'RINNOVO')) continue;
     const an = perNome.get(chiave(c.nome_centro));
-    get(an && an.consulente ? an.consulente : '(non assegnato)').rinnovi += 1;
+    get((an && an[campo]) || NON_ASSEGNATO).rinnovi += 1;
   }
   for (const r of incassi()) {
     if (ymOf(r.data_incasso) !== MESE) continue;
     const an = perNome.get(chiave(r.centro));
-    const k = (an && an.consulente) || r.consulente || '(non assegnato)';
-    get(k).incassato += (+r.importo || 0);
+    get((an && an[campo]) || (campo === 'consulente' && r.consulente) || NON_ASSEGNATO).incassato += (+r.importo || 0);
   }
   return [...m.values()].map(a => {
-    a.saturazione = a.gestiti / CAP_PM * 100;
+    a.capacita = a.pm === NON_ASSEGNATO ? null : capDi(ruolo, a.pm);
+    a.saturazione = a.capacita > 0 ? a.gestiti / a.capacita * 100 : null;
     a.perCliente = a.gestiti > 0 ? a.incassato / a.gestiti : null;
     return a;
   });
 }
 
-const pmCols = [
-  { key: 'pm', label: 'Project manager' },
-  { key: 'gestiti', label: 'Clienti gestiti', fmt },
-  { key: 'saturazione', label: 'Saturazione', fmt: v => fmtPct(v) },
-  { key: 'onboarding', label: 'In onboarding', fmt },
-  { key: 'attesaRinnovo', label: 'In attesa rinnovo', fmt },
-  { key: 'rinnovi', label: 'Rinnovi firmati', fmt },
-  { key: 'persi12m', label: 'Persi (12 mesi)', fmt },
-  { key: 'incassato', label: 'Incassato del mese', fmt: eur },
-];
+// riempimento del ruolo = clienti assegnati ÷ somma delle capienze delle persone
+function riempimentoRuolo(ruolo) {
+  const righe = caricoPerRuolo(ruolo);
+  const persone = righe.filter(r => r.pm !== NON_ASSEGNATO && (r.gestiti > 0 || capImpostata(ruolo, r.pm)));
+  const posti = persone.reduce((a, r) => a + (r.capacita || 0), 0);
+  const assegnati = persone.reduce((a, r) => a + r.gestiti, 0);
+  const senza = righe.filter(r => r.pm === NON_ASSEGNATO).reduce((a, r) => a + r.gestiti, 0);
+  return { ruolo, persone: persone.length, posti, assegnati, senza,
+           quota: posti > 0 ? assegnati / posti : null };
+}
+
+const capCol = {
+  key: 'capacita', label: 'Capienza (modificabile)',
+  fmt: (v, r) => r.pm === NON_ASSEGNATO ? '—'
+    : `<input type="number" class="cap-inp" min="0" max="1000" step="1" value="${v}"
+        data-ruolo="${esc(r.ruolo)}" data-nome="${esc(r.pm)}"
+        title="Quanti clienti può seguire ${esc(r.pm)}">`,
+};
+const colsRuolo = ruolo => {
+  const R = RUOLI_CAP.find(x => x.key === ruolo);
+  const cols = [
+    { key: 'pm', label: R.label },
+    { key: 'gestiti', label: 'Clienti gestiti', fmt },
+    capCol,
+    { key: 'saturazione', label: 'Saturazione', fmt: v => v === null ? '—'
+      : `<span class="${v >= 95 ? 'val-bad' : (v >= 75 ? '' : 'val-good')}">${fmtPct(v)}</span>` },
+    { key: 'onboarding', label: 'In onboarding', fmt },
+    { key: 'attesaRinnovo', label: 'In attesa rinnovo', fmt },
+    { key: 'rinnovi', label: 'Rinnovi firmati', fmt },
+    { key: 'persi12m', label: 'Persi (12 mesi)', fmt },
+  ];
+  if (ruolo === 'PM') cols.push({ key: 'incassato', label: 'Incassato del mese', fmt: eur });
+  return cols;
+};
+
+// salvataggio della capienza: upsert su fin_capacita e ridisegno
+async function salvaCapacita(ruolo, nome, valore) {
+  const n = Math.max(0, Math.min(1000, Math.round(+valore || 0)));
+  const { error } = await supabase.from('fin_capacita')
+    .upsert({ ruolo, nome, capacita: n, updated_at: new Date().toISOString() }, { onConflict: 'ruolo,nome' });
+  if (error) { alert('Non sono riuscito a salvare la capienza: ' + error.message); return; }
+  DATA.capacita = (DATA.capacita || []).filter(c => !(c.ruolo === ruolo && c.nome === nome))
+    .concat([{ ruolo, nome, capacita: n }]);
+  rebuildCap();
+  renderDelivery();
+}
 
 // tasso di rinnovo e churn, mese per mese (ultimi 12)
 function rinnoviChurn() {
@@ -930,7 +989,13 @@ function rinnoviChurn() {
 }
 
 function renderDelivery() {
-  const righe = deliveryPerPm().filter(r => r.gestiti > 0 || r.rinnovi > 0 || r.incassato > 0);
+  const perRuoloRighe = {};
+  RUOLI_CAP.forEach(R => {
+    perRuoloRighe[R.key] = caricoPerRuolo(R.key)
+      .filter(r => r.gestiti > 0 || r.rinnovi > 0 || r.incassato > 0 || capImpostata(R.key, r.pm));
+  });
+  const riemp = {};
+  RUOLI_CAP.forEach(R => { riemp[R.key] = riempimentoRuolo(R.key); });
   const rc = rinnoviChurn();
   const cm = costiMese(MESE);
   const teamDel = cm.occ.filter(c => (c.reparto || '') === 'Delivery');
@@ -950,13 +1015,17 @@ function renderDelivery() {
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnDelKpi"></div>
 
+    ${RUOLI_CAP.map(R => `
     <div class="card">
-      <h2>Carico per project manager</h2>
-      <div class="subtitle">Clienti in gestione (tutti gli stati tranne CLIENTE PERSO/SPARITO) e saturazione
-        sulla capienza di riferimento di ${CAP_PM} clienti per PM. Rinnovi e incassato sono attribuiti
-        al PM del centro (join per nome del centro).</div>
-      <div class="table-scroll"><table id="fnPm"></table></div>
-    </div>
+      <h2>Carico per ${R.plur}</h2>
+      <div class="subtitle">Clienti in gestione (tutti gli stati tranne CLIENTE PERSO/SPARITO) e saturazione sulla
+        <strong>capienza che imposti tu</strong> nella colonna a fianco: si salva da sola e vale anche per il
+        riempimento team in Dashboard. Finché non la tocchi vale ${CAP_DEFAULT}.
+        ${R.key === 'PM' ? 'Rinnovi e incassato sono attribuiti al PM del centro (join per nome del centro).'
+          : 'Rinnovi attribuiti alla persona assegnata al centro.'}
+        ${riemp[R.key].senza > 0 ? `<strong>${fmt(riemp[R.key].senza)} clienti gestiti non hanno un ${R.plur} assegnato</strong> su Notion.` : ''}</div>
+      <div class="table-scroll"><table id="fnRuolo${R.key}"></table></div>
+    </div>`).join('')}
 
     <div class="card">
       <h2>Costo del team delivery — ${ymLabel(MESE)}</h2>
@@ -1002,7 +1071,8 @@ function renderDelivery() {
 
   renderKpiRow(_mount.querySelector('#fnDelKpi'), [
     { label: 'Clienti in gestione', value: fmt(gestiti), sub: nPM + ' project manager attivi' },
-    { label: 'Media per PM', value: fmt1(safeDiv(gestiti, nPM)), sub: 'capienza di riferimento ' + CAP_PM },
+    { label: 'Media per PM', value: fmt1(safeDiv(gestiti, nPM)),
+      sub: 'posti PM impostati: ' + fmt(riemp.PM.posti) },
     { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese' },
     { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti)), sub: 'solo team delivery' },
     { label: 'Tasso di rinnovo 12 mesi', value: fmtPct(pct(rinTot, rinTot + persiTot)),
@@ -1011,9 +1081,26 @@ function renderDelivery() {
       sub: 'sui clienti in gestione' },
   ]);
 
-  renderTable(_mount.querySelector('#fnPm'), pmCols, righe, pmSort,
-    k => { pmSort = { key: k, dir: pmSort.key === k ? -pmSort.dir : -1 }; renderDelivery(); },
-    { barKey: 'gestiti' });
+  RUOLI_CAP.forEach(R => {
+    const el = _mount.querySelector('#fnRuolo' + R.key);
+    if (!el) return;
+    const righe = perRuoloRighe[R.key];
+    if (!righe.length) { el.innerHTML = '<div class="status">Nessun ' + R.plur + ' assegnato sui centri.</div>'; return; }
+    renderTable(el, colsRuolo(R.key), righe, ruoloSort[R.key],
+      k => {
+        const s = ruoloSort[R.key];
+        ruoloSort[R.key] = { key: k, dir: s.key === k ? -s.dir : -1 };
+        renderDelivery();
+      },
+      { barKey: 'gestiti' });
+  });
+
+  // le capienze si salvano appena esci dal campo (o premi Invio)
+  _mount.querySelectorAll('input.cap-inp').forEach(inp => {
+    inp.onchange = () => salvaCapacita(inp.dataset.ruolo, inp.dataset.nome, inp.value);
+    inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+    inp.onclick = e => e.stopPropagation();     // non far partire l'ordinamento della riga
+  });
 
   const elR = _mount.querySelector('#fnRuoli');
   if (!perRuolo.length) elR.innerHTML = '<div class="status">Nessuna voce Delivery nel registro costi.</div>';
