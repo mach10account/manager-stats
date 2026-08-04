@@ -4,13 +4,29 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
+<!-- CSP: GitHub Pages non permette di impostare header, quindi va in <meta>.
+     script-src NON ha 'unsafe-inline': un gestore inline iniettato in un
+     attributo (title="…" onmouseover="…") non viene eseguito dal browser.
+     style-src invece lo richiede: l'app genera style="width:…%" nei grafici.
+     NB: frame-ancestors in <meta> viene ignorato dai browser — per il
+     clickjacking servirebbe un header, che qui non abbiamo. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self' https://cdn.jsdelivr.net/npm/;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src https://fonts.gstatic.com;
+  img-src 'self' data:;
+  connect-src 'self' https://ueejjgocuvmmkxsogdvu.supabase.co wss://ueejjgocuvmmkxsogdvu.supabase.co https://n8n.srv1035791.hstgr.cloud;
+  base-uri 'none';
+  object-src 'none';
+  form-action 'none'">
 <meta name="theme-color" content="#1a56c9">
 <title>Manager Stats — Salone Vincente</title>
 <link rel="icon" type="image/png" href="./assets/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./css/app.css?v=sauron10">
+<link rel="stylesheet" href="./css/app.css?v=sec11">
 </head>
 <body>
 
@@ -137,6 +153,6 @@
 <!-- ?v= da bumpare quando cambia app.js: un reload normale rivalida index.html
      ma NON i moduli in cache (max-age=600) → senza bump si può restare col
      bootstrap vecchio che non conosce le rotte nuove. -->
-<script type="module" src="./js/app.js?v=sauron10"></script>
+<script type="module" src="./js/app.js?v=sec11"></script>
 </body>
 </html>

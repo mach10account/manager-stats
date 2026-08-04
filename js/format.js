@@ -34,5 +34,12 @@ export function todayRome() {
 }
 
 // html / css
-export const esc  = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Le virgolette vanno escapate come il resto: esc() finisce spesso DENTRO un
+// attributo (title="${esc(x)}"), e senza questo un nome o un titolo di task che
+// contiene un apice doppio esce dall'attributo e ci si può appendere un
+// gestore inline. Le entità vengono ridecodificate dal parser HTML, quindi
+// dataset.* e input.value continuano a rileggere il testo originale.
+export const esc  = s => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 export const cssv = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();

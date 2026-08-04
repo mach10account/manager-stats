@@ -1,5 +1,5 @@
 // manager-stats · grafici SVG fatti a mano (line + bar), tooltip + crosshair (portati)
-import { fmt, cssv } from './format.js';
+import { fmt, cssv, esc } from './format.js';
 
 // ── tooltip fisso condiviso ──────────────────────────────────────────────────
 export function showTip(ev, html) {
@@ -21,7 +21,7 @@ export function hideTip() {
 }
 
 function emptyMsg(svg, W, H, txt) {
-  svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="${cssv('--muted')}" font-size="13">${txt || 'Nessun dato nel periodo'}</text>`;
+  svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="${cssv('--muted')}" font-size="13">${esc(txt || 'Nessun dato nel periodo')}</text>`;
 }
 
 // ── grafico a linee (1..N serie) ─────────────────────────────────────────────

@@ -1,10 +1,12 @@
 // manager-stats · bootstrap: auth, router, filtri, montaggio sezioni
-import { signIn, signOut, onAuthStateChange, requireSession, isAuthError, supabase } from './supabase.js';
+import { signIn, signOut, scartaSessioneLocale, onAuthStateChange, requireSession, isAuthError, supabase } from './supabase.js';
 import { setTrackUser, track } from './track.js';
 import { initFilters, filtroConsulenteUtile } from './filters.js';
 import { startRouter, parseHash, navigate } from './router.js';
 import { initModal } from './modal.js';
 import { loadFreshness, clearCentriCache } from './data.js';
+import { esc } from './format.js';
+import * as idle from './idle.js?v=1';   // ?v da bumpare quando cambia idle.js
 
 import * as panoramica from './sections/panoramica.js';
 import * as marketing from './sections/marketing.js';
@@ -59,6 +61,7 @@ function showLogin() {
   $('shell').classList.add('hidden');
   $('login').classList.remove('hidden');
   accessTracked = false; // un nuovo login nella stessa tab conta come nuovo ACCESSO
+  idle.stop();           // solo il timer: i timbri li azzera chi esce davvero (vedi sessioneScaduta / Esci)
 
   // Se nella stessa tab entra un altro utente, boot() deve rigirare: altrimenti si
   // porterebbe dietro i permessi (e la nav) di chi c'era prima.
@@ -72,9 +75,29 @@ function showLogin() {
   if (pw) pw.value = '';
 }
 
-async function showApp() {
+// Chiusura automatica. Si torna al login SUBITO, prima di toccare la rete:
+// signOut() può metterci parecchio (o non tornare affatto) e nel frattempo i
+// dati resterebbero a schermo. La revoca lato server è comunque necessaria —
+// svuotare solo localStorage lascerebbe valido un refresh token già copiato.
+async function sessioneScaduta(motivo) {
+  idle.azzera();
+  clearCentriCache();
+  showLogin();
+  const err = $('loginError');
+  if (err) err.textContent = motivo === 'inattivita'
+    ? 'Sessione chiusa per inattività. Accedi di nuovo.'
+    : 'Sessione scaduta per durata massima. Accedi di nuovo.';
+  track('SCADENZA', motivo);
+  const res = await signOut();
+  if (res && res.error) scartaSessioneLocale();
+}
+
+async function showApp(session) {
   $('login').classList.add('hidden');
   $('shell').classList.remove('hidden');
+  // se la sessione è già oltre i limiti si esce qui, senza montare nulla
+  const scaduta = idle.start(session && session.user ? session.user.id : null, sessioneScaduta);
+  if (scaduta) { sessioneScaduta(scaduta); return; }
   if (!accessTracked) {
     accessTracked = true;
     track('ACCESSO');
@@ -159,7 +182,7 @@ function renderCurrent() {
     .then(() => sections[path].render(mount, route.params))
     .catch(err => {
       if (isAuthError(err)) { showLogin(); return; }
-      mount.innerHTML = `<div class="status">Errore: ${err && err.message ? err.message : err}</div>`;
+      mount.innerHTML = `<div class="status">Errore: ${esc(err && err.message ? err.message : err)}</div>`;
       console.error(err);
     });
 }
@@ -207,7 +230,9 @@ function initAuthUI() {
   });
   $('logout').addEventListener('click', async () => {
     track('LOGOUT');
-    await signOut();
+    idle.azzera();                 // uscita voluta: via anche i timbri
+    const res = await signOut();
+    if (res && res.error) scartaSessioneLocale();
     clearCentriCache();
     showLogin();
   });
@@ -217,7 +242,7 @@ function initAuthUI() {
 let resolved = false;
 function resolve(session) {
   setTrackUser(session && session.user ? session.user.email : null);
-  if (session) showApp(); else showLogin();
+  if (session) showApp(session); else showLogin();
 }
 
 initAuthUI();
@@ -225,7 +250,7 @@ onAuthStateChange((event, session) => {
   resolved = true;
   setTrackUser(session && session.user ? session.user.email : null);
   // Copre tutti i casi, incluso INITIAL_SESSION con session=null (primo accesso, non loggato)
-  if (session) showApp();
+  if (session) showApp(session);
   else showLogin();
 });
 // rete di sicurezza se INITIAL_SESSION non scatta

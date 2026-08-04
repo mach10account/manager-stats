@@ -28,7 +28,7 @@ export async function openEsiti(opts) {
     }
     const max = Math.max(...esiti.map(e => e.n), 1);
     $('emBody').innerHTML = esiti.map(e => `
-      <div class="esito-row" data-esito="${esc(e.esito).replace(/"/g, '&quot;')}">
+      <div class="esito-row" data-esito="${esc(e.esito)}">
         <div class="esito-click" title="Clicca per le note della beauty">
           <div class="esito-top">
             <span class="lbl">${esc(e.esito)}</span>

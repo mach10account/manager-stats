@@ -23,6 +23,16 @@ export async function signOut() {
   return supabase.auth.signOut();
 }
 
+// signOut() NON lancia: torna { error }. E se la rete non risponde, supabase-js
+// esce PRIMA di ripulire la sessione locale — l'utente vedrebbe il login ma un
+// reload lo farebbe rientrare come se nulla fosse. Questa è l'ultima risorsa.
+export function scartaSessioneLocale() {
+  try {
+    const ref = new URL(SUPABASE_URL).hostname.split('.')[0];
+    localStorage.removeItem('sb-' + ref + '-auth-token');
+  } catch (e) { /* storage negato */ }
+}
+
 export function onAuthStateChange(cb) {
   return supabase.auth.onAuthStateChange(cb);
 }
