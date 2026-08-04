@@ -1,7 +1,7 @@
 // manager-stats · Sezione Sauron (ex Finance, solo admin) — porting del prototipo CFO Cockpit
 //
 // Fonti: fin_incassi (1 riga = 1 rata, da Notion 🏦 DATABASE INCASSI),
-// fin_contratti (1 riga = 1 contratto, da DATABASE VALORE CONTRATTI),
+// v_notion_contratti (mirror del DATABASE CONTRATTI: 1 riga = 1 contratto vero),
 // fin_costi (voci di costo, EDITABILI qui), centri (anagrafica clienti:
 // churn, ciclo di vita, PM e beauty). Sync WF-M7/WF-M1; RLS solo admin.
 //
@@ -69,7 +69,9 @@ async function buildData() {
     fetchAll((lo, hi) => supabase.from('fin_incassi')
       .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo,comm_venditore,comm_setter,comm_pm,comm_mb,comm_bs')
       .range(lo, hi)),
-    fetchAll((lo, hi) => supabase.from('fin_contratti')
+    // mirror del DATABASE CONTRATTI di Notion: 1 riga = 1 contratto vero.
+    // (fin_contratti nasceva da VALORE CONTRATTI e contava anche righe senza contratto)
+    fetchAll((lo, hi) => supabase.from('v_notion_contratti')
       .select('nome_centro,id_contratto,valore,stato,durata,agenzia,venditore,creazione_contratto')
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('centri')
@@ -77,7 +79,14 @@ async function buildData() {
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi)),
   ]);
-  return { incassi, contratti, centri, costi };
+  // dal mirror il venditore arriva come array e il valore come numeric (stringa via
+  // PostgREST): qui li riporto alle forme che il resto della sezione si aspetta.
+  const contrattiNorm = contratti.map(c => ({
+    ...c,
+    valore: (c.valore === null || c.valore === undefined) ? null : Number(c.valore),
+    venditore: Array.isArray(c.venditore) ? c.venditore.join(', ') : c.venditore,
+  }));
+  return { incassi, contratti: contrattiNorm, centri, costi };
 }
 
 async function ricaricaCosti() {
