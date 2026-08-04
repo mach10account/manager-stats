@@ -285,10 +285,19 @@ function renderKPI() {
   const gestiti = centriRows().filter(isGestito);
   const riempR = {};
   RUOLI_CAP.forEach(R => { riempR[R.key] = riempimentoRuolo(R.key); });
+  // riempimento complessivo: posti occupati su posti totali dei tre reparti
+  const riempTot = RUOLI_CAP.reduce((a, R) => {
+    const x = riempR[R.key];
+    return { assegnati: a.assegnati + x.assegnati, posti: a.posti + x.posti, persone: a.persone + x.persone };
+  }, { assegnati: 0, posti: 0, persone: 0 });
+  riempTot.quota = riempTot.posti > 0 ? riempTot.assegnati / riempTot.posti : null;
+  const conPosti = RUOLI_CAP.filter(R => riempR[R.key].quota !== null);
+  riempTot.media = conPosti.length
+    ? conPosti.reduce((a, R) => a + riempR[R.key].quota, 0) / conPosti.length : null;
+
   const tileRiemp = R => {
     const x = riempR[R.key];
     return { label: 'Riempimento ' + R.plur, value: x.quota === null ? '—' : pctFrac(x.quota),
-      hero: R.key === 'PM',
       tone: x.quota === null ? undefined : (x.quota >= 0.95 ? 'bad' : (x.quota >= 0.75 ? undefined : 'good')),
       sub: x.posti === 0
         ? 'nessuna capienza impostata: falla nella tab Delivery'
@@ -337,6 +346,14 @@ function renderKPI() {
         sub: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
     ] },
     { step: 5, title: 'Azienda', tiles: [
+      { label: 'Riempimento team', value: riempTot.quota === null ? '—' : pctFrac(riempTot.quota), hero: true,
+        tone: riempTot.quota === null ? undefined
+          : (riempTot.quota >= 0.95 ? 'bad' : (riempTot.quota >= 0.75 ? undefined : 'good')),
+        sub: riempTot.posti === 0
+          ? 'nessuna capienza impostata: falle nella tab Delivery'
+          : fmt(riempTot.assegnati) + ' posti occupati su ' + fmt(riempTot.posti)
+            + ' (' + riempTot.persone + ' persone nei tre reparti) · media dei reparti '
+            + pctFrac(riempTot.media) },
       tileRiemp(RUOLI_CAP[0]),
       tileRiemp(RUOLI_CAP[1]),
       tileRiemp(RUOLI_CAP[2]),
@@ -1420,7 +1437,9 @@ function renderReport() {
           <b>ADS ATTIVE</b> (default 12). Restano fuori dal carico i clienti parcheggiati — spostati a estetista
           indipendente, riparte a settembre, standby, senza stato — che invece sono dentro "clienti gestiti".
           Al numeratore contano solo i clienti con quella persona assegnata su Notion: quelli senza sono
-          dichiarati a parte nel sottotitolo della tile.</li>
+          dichiarati a parte nel sottotitolo della tile.
+          La tile grande <b>Riempimento team</b> è il totale dei tre reparti — posti occupati ÷ posti disponibili —
+          quindi pesa i reparti per quante persone hanno; la media semplice delle tre percentuali è nel sottotitolo.</li>
         <li><b>Confronto col mese prima</b>: se il mese è in corso, il precedente viene tagliato allo stesso giorno,
           altrimenti il confronto sarebbe sempre in perdita.</li>
       </ul>
