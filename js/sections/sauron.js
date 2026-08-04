@@ -279,12 +279,22 @@ function renderKPI() {
     ? (cur >= prev ? '+' : '') + fmt(100 * (cur - prev) / prev) + '% ' + rif + ' (' + eur(prev) + ')'
     : null;
 
-  // commerciale: churn da DATA CLIENTE PERSO · azienda: riempimento come il Cockpit
+  // commerciale: churn da DATA CLIENTE PERSO · azienda: riempimento sulle capienze
+  // impostate persona per persona nella tab Delivery (fin_capacita)
   const persiMese = centriRows().filter(x => x.data_cliente_perso && ymOf(x.data_cliente_perso) === MESE).length;
-  const CAP_PM = 35;
   const gestiti = centriRows().filter(isGestito);
-  const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean)).size;
-  const riemp = nPM > 0 ? gestiti.length / (nPM * CAP_PM) : null;
+  const riempR = {};
+  RUOLI_CAP.forEach(R => { riempR[R.key] = riempimentoRuolo(R.key); });
+  const tileRiemp = R => {
+    const x = riempR[R.key];
+    return { label: 'Riempimento ' + R.plur, value: x.quota === null ? '—' : pctFrac(x.quota),
+      hero: R.key === 'PM',
+      tone: x.quota === null ? undefined : (x.quota >= 0.95 ? 'bad' : (x.quota >= 0.75 ? undefined : 'good')),
+      sub: x.posti === 0
+        ? 'nessuna capienza impostata: falla nella tab Delivery'
+        : fmt(x.assegnati) + ' clienti ÷ ' + fmt(x.posti) + ' posti (' + x.persone + ' persone)'
+          + (x.senza > 0 ? ' · ' + fmt(x.senza) + ' senza ' + R.plur : '') };
+  };
 
   const p = pnl(MESE);
   const cm = p.cm;
@@ -327,9 +337,9 @@ function renderKPI() {
         sub: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
     ] },
     { step: 5, title: 'Azienda', tiles: [
-      { label: 'Riempimento team', value: riemp === null ? '—' : pctFrac(riemp), hero: true,
-        tone: riemp === null ? undefined : (riemp >= 0.95 ? 'bad' : (riemp >= 0.75 ? undefined : 'good')),
-        sub: fmt(gestiti.length) + ' aziende gestite ÷ (' + nPM + ' PM × ' + CAP_PM + ' clienti)' },
+      tileRiemp(RUOLI_CAP[0]),
+      tileRiemp(RUOLI_CAP[1]),
+      tileRiemp(RUOLI_CAP[2]),
       { label: 'Aziende gestite', value: fmt(gestiti.length), sub: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
       { label: 'Costi del mese', value: eur(cm.tot),
         sub: 'voci ' + eur(cm.manuali) + ' + commissioni ' + eur(cm.comm.tot) + (cm.rimborsi > 0 ? ' + rimborsi ' + eur(cm.rimborsi) : '') },
@@ -1377,6 +1387,10 @@ function renderReport() {
         <li><b>EBITDA</b>: ricavi netti − costi correnti − commissioni, <b>esclusi</b> investimenti e asset.
           <b>Cash flow / margine netto</b>: EBITDA meno gli investimenti.</li>
         <li><b>Clienti persi</b>: DATA CLIENTE PERSO su Notion DATABASE CLIENTI, nel mese.</li>
+        <li><b>Riempimento team</b>: clienti assegnati ÷ somma delle <b>capienze che imposti tu</b> nella tab Delivery,
+          una per persona e per ruolo (project manager, beauty specialist, media buyer). Finché una capienza non viene
+          impostata vale ${CAP_DEFAULT}. Al numeratore ci sono solo i clienti in gestione che hanno quella persona
+          assegnata su Notion: i clienti senza ruolo assegnato sono contati a parte nel sottotitolo della tile.</li>
         <li><b>Confronto col mese prima</b>: se il mese è in corso, il precedente viene tagliato allo stesso giorno,
           altrimenti il confronto sarebbe sempre in perdita.</li>
       </ul>
@@ -1428,6 +1442,7 @@ async function load() {
     const data = await buildData();
     if (myId !== _renderId || !_mount.querySelector('#fnContent')) return;
     DATA = data;
+    rebuildCap();
     if (!data.incassi.length && !data.contratti.length) {
       status.textContent = 'Nessun dato disponibile (il sync gira ogni ora al minuto 50).';
       return;

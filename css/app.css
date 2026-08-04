@@ -816,6 +816,13 @@ select.ac-vede {
 }
 .fn-pnl tr.fn-tot td { font-weight: 700; border-top: 1px solid var(--baseline); }
 .fn-pnl td.fn-quota { color: var(--muted); }
+/* capienza per persona, modificabile dentro le tabelle Delivery */
+.cap-inp {
+  width: 66px; padding: 3px 6px; font: inherit; font-size: 13px; text-align: right;
+  color: var(--text); background: var(--card-bg, transparent);
+  border: 1px solid var(--grid); border-radius: 7px;
+}
+.cap-inp:focus { outline: none; border-color: var(--accent, #2270d8); }
 .fn-rank { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
 .fn-rank-card h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
 .fn-export-row {
