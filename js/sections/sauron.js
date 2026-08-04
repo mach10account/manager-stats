@@ -286,8 +286,8 @@ function renderKPI() {
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
       { label: 'Incassato del mese', value: eur(s.tot), hero: true, sub: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
-      { label: 'Clienti che hanno pagato la 1ª rata', value: eur(s.nuovi),
-        sub: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente' : ' clienti') + ' partiti nel mese' },
+      { label: 'Nuovi clienti — 1ª rata pagata', value: eur(s.nuovi),
+        sub: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente partito' : ' clienti partiti') + ' nel mese · esclusi rinnovi e upsell' },
       { label: 'Rate', value: eur(s.rate), sub: 'rate successive di clienti attivi' },
       { label: 'Rinnovi', value: eur(s.rinnovi), sub: 'tag RINNOVO sul contratto' },
       { label: 'Upsell', value: eur(s.upsell) },
@@ -314,7 +314,7 @@ function renderKPI() {
         sub: 'segnati persi su Notion nel mese (churn)' },
       { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), sub: 'valore medio dei contratti nuovi' },
       { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
-        sub: s.nuoviIds.size + ' clienti hanno pagato la prima rata nel mese' },
+        sub: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
     ] },
     { step: 5, title: 'Azienda', tiles: [
       { label: 'Riempimento team', value: riemp === null ? '—' : pctFrac(riemp), hero: true,
@@ -1218,10 +1218,13 @@ function renderReport() {
           Una rata conta come incassata se ha la data di incasso o la spunta PAGATO.</li>
         <li><b>Contrattualizzato</b>: somma di VALORE CONTRATTO dei contratti creati nel mese
           (Notion DATABASE CONTRATTI), per data di creazione. Una riga = un contratto.</li>
-        <li><b>Clienti che hanno pagato la 1ª rata</b>: rate con RATA NUMERO 1 incassate nel mese
-          (su Notion la riga ha NUMERO RATA INCASSATA = 1), escluse quelle di rinnovi e upsell.
+        <li><b>Nuovi clienti — 1ª rata pagata</b>: rate con RATA NUMERO 1 incassate nel mese
+          (su Notion la riga ha NUMERO RATA INCASSATA = 1), <b>escluse quelle di rinnovi e upsell</b>.
           Conta quando il cliente <i>parte</i>, non quando firma: se firma a giugno e paga a luglio, sta in luglio.
-          Le <b>rate</b> sono tutte le successive alla prima; rinnovi e upsell seguono il tag esatto sul contratto.</li>
+          Attenzione: filtrando su Notion per DATA INCASSO + rata 1 il totale è più alto, perché lì dentro
+          ci sono anche le prime rate dei rinnovi e degli upsell, che qui hanno la loro tile.
+          Le <b>rate</b> sono le successive alla prima, sempre al netto di rinnovi e upsell: così le quattro
+          voci del gruppo sommano esattamente all'incassato del mese.</li>
         <li><b>Commissioni</b>: formule di Notion sulla singola rata (venditore 10%, setter 5%, PM/MB/BS sui rinnovi),
           sommate sugli incassi del mese. Non sono stime.</li>
         <li><b>Costi</b>: registro interno (tab Costi). Una voce mensile conta da <i>data inizio</i> in poi,
