@@ -171,17 +171,22 @@ function scadenze(m) {
   return t;
 }
 
-// rate scadute da oltre 7 giorni e mai incassate, fino a fine mese selezionato
-function insolute(m) {
+// rate scadute da oltre 7 giorni e mai incassate.
+// soloMese = true  → solo le scadenze DEL mese m: com'è andato quel mese.
+// soloMese = false → tutto lo storico fino a fine mese m: l'esposizione accumulata.
+// Il taglio è il minore fra oggi-7 e la fine del mese: i 7 giorni sono la
+// tolleranza per i bonifici in viaggio, e valgono solo sul mese in corso.
+function insolute(m, soloMese) {
   const oggi = todayRome();
   oggi.setDate(oggi.getDate() - 7);
   const cut = dstr(oggi) < fineMese(m) ? dstr(oggi) : fineMese(m);
-  const t = { scadute: 0, nonIncassate: 0, nScadute: 0, righe: [] };
+  const t = { scadute: 0, nonIncassate: 0, nScadute: 0, nNonIncassate: 0, righe: [] };
   for (const r of incassi()) {
     if (!r.data_scadenza || r.data_scadenza > cut) continue;
+    if (soloMese && ymOf(r.data_scadenza) !== m) continue;
     const imp = +r.importo || 0;
     t.scadute += imp; t.nScadute += 1;
-    if (!incassata(r)) { t.nonIncassate += imp; t.righe.push(r); }
+    if (!incassata(r)) { t.nonIncassate += imp; t.nNonIncassate += 1; t.righe.push(r); }
   }
   return t;
 }
@@ -265,7 +270,8 @@ function renderKPI() {
   const c = contrattualizzato(MESE);
   const cPrev = contrattualizzato(addYm(MESE, -1), maxDay);
   const sc = scadenze(MESE);
-  const ins = insolute(MESE);
+  const ins = insolute(MESE, true);            // solo le scadenze del mese
+  const insTot = insolute(MESE);               // esposizione accumulata, per il sottotitolo
   const insPct = pct(ins.nonIncassate, ins.scadute);
   const rif = maxDay ? 'sui giorni 1–' + (+maxDay) + ' del mese prima' : 'sul mese prima';
   const delta = (cur, prev) => prev > 0
@@ -303,8 +309,11 @@ function renderKPI() {
         sub: fmt(sc.nRate) + ' rate in scadenza a ' + ymLabel(MESE) + ' non ancora incassate' },
       { label: 'Previsto nel mese', value: eur(sc.previsto), sub: 'tutte le rate in scadenza nel mese' },
       { label: 'Già incassato sulle scadenze', value: eur(sc.incassato), sub: fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto' },
-      { label: 'Insolute (>7gg)', value: fmtPct(insPct), tone: ins.nonIncassate > 0 ? 'bad' : 'good',
-        sub: eur(ins.nonIncassate) + ' mai incassati su ' + eur(ins.scadute) + ' di rate scadute da oltre 7 giorni, fino a ' + ymLabel(MESE) },
+      { label: 'Insolute del mese (>7gg)', value: fmtPct(insPct), tone: ins.nonIncassate > 0 ? 'bad' : 'good',
+        sub: ins.nScadute === 0
+          ? 'nessuna rata di ' + ymLabel(MESE) + ' è ancora scaduta da oltre 7 giorni'
+          : eur(ins.nonIncassate) + ' mai incassati su ' + eur(ins.scadute) + ' scaduti a ' + ymLabel(MESE)
+            + ' · arretrato totale fino a qui ' + eur(insTot.nonIncassate) },
     ] },
     { step: 4, title: 'Commerciale', tiles: [
       { label: 'Nuovi clienti', value: fmt(c.nuovi), hero: true, sub: 'contratti nuovi creati nel mese' },
@@ -437,6 +446,39 @@ const insCols = [
   { key: 'venditore', label: 'Venditore', fmt: v => esc(v || '—') },
 ];
 
+// insoluto per mese di scadenza, ultimi 12 mesi: la lettura "com'è andato quel mese",
+// senza l'arretrato dei mesi precedenti che schiaccia sempre la percentuale.
+function renderInsoluteMensile() {
+  const el = _mount.querySelector('#fnInsMensile');
+  if (!el) return;
+  const righe = [];
+  for (let i = 11; i >= 0; i--) {
+    const m = addYm(MESE, -i);
+    const x = insolute(m, true);
+    righe.push({ m, scadute: x.scadute, non: x.nonIncassate, n: x.nNonIncassate, p: pct(x.nonIncassate, x.scadute) });
+  }
+  const tot = righe.reduce((a, r) => ({ scadute: a.scadute + r.scadute, non: a.non + r.non, n: a.n + r.n }),
+    { scadute: 0, non: 0, n: 0 });
+  el.innerHTML = `
+    <thead><tr><th>Mese di scadenza</th><th>Scaduto</th><th>Incassato</th><th>Mai incassato</th><th>Rate</th><th>% insoluto</th></tr></thead>
+    <tbody>
+      ${righe.map(r => `<tr>
+        <td class="name">${ymLabel(r.m)}</td>
+        <td>${eur(r.scadute)}</td>
+        <td>${eur(r.scadute - r.non)}</td>
+        <td>${r.non > 0 ? `<span class="val-bad">${eur(r.non)}</span>` : '—'}</td>
+        <td>${r.n > 0 ? fmt(r.n) : '—'}</td>
+        <td>${fmtPct(r.p)}</td></tr>`).join('')}
+      <tr class="fn-tot">
+        <td class="name">Totale 12 mesi</td>
+        <td>${eur(tot.scadute)}</td>
+        <td>${eur(tot.scadute - tot.non)}</td>
+        <td>${eur(tot.non)}</td>
+        <td>${fmt(tot.n)}</td>
+        <td>${fmtPct(pct(tot.non, tot.scadute))}</td></tr>
+    </tbody>`;
+}
+
 function renderInsolute() {
   const el = _mount.querySelector('#fnInsolute');
   if (!el) return;
@@ -475,9 +517,17 @@ const DASH_HTML = `
   </div>
 
   <div class="card">
+    <h2>Insoluto mese per mese</h2>
+    <div class="subtitle">Ultimi 12 mesi fino a <span id="fnInsMeseLabel"></span>, per <strong>mese di scadenza</strong>:
+      quanto è arrivato a scadenza e quanto di quello non è ancora entrato, alla data di oggi.
+      Sul mese in corso contano solo le rate scadute da oltre 7 giorni.</div>
+    <div class="table-scroll"><table class="fn-pnl" id="fnInsMensile"></table></div>
+  </div>
+
+  <div class="card">
     <h2>Rate scadute e non incassate</h2>
-    <div class="subtitle">Tutte le rate scadute da <strong>oltre 7 giorni</strong> e mai incassate,
-      fino alla fine del mese selezionato: è la lista da lavorare per recuperare gli insoluti.</div>
+    <div class="subtitle">La lista da lavorare per il recupero: <strong>tutte</strong> le rate scadute da
+      oltre 7 giorni e mai incassate, dall'inizio fino alla fine del mese selezionato — non solo quelle del mese.</div>
     <div class="table-scroll"><table id="fnInsolute"></table></div>
   </div>`;
 
@@ -485,10 +535,13 @@ function renderDash() {
   _mount.querySelector('#fnContent').innerHTML = DASH_HTML;
   const lab = _mount.querySelector('#fnMeseLabel');
   if (lab) lab.textContent = ymLabel(MESE);
+  const labIns = _mount.querySelector('#fnInsMeseLabel');
+  if (labIns) labIns.textContent = ymLabel(MESE);
   renderKPI();
   renderTrend();
   renderCentri();
   renderContratti();
+  renderInsoluteMensile();
   renderInsolute();
 }
 
@@ -1225,6 +1278,11 @@ function renderReport() {
           ci sono anche le prime rate dei rinnovi e degli upsell, che qui hanno la loro tile.
           Le <b>rate</b> sono le successive alla prima, sempre al netto di rinnovi e upsell: così le quattro
           voci del gruppo sommano esattamente all'incassato del mese.</li>
+        <li><b>Insolute (&gt;7gg)</b>: due letture diverse. La <b>tile</b> e la tabella "mese per mese" guardano solo
+          le rate con DATA SCADENZA <i>in quel mese</i>: quanto è scaduto e quanto di quello non è ancora entrato.
+          La <b>lista di recupero</b> in fondo è invece cumulativa, dall'inizio a oggi. In entrambe una rata conta
+          come scaduta solo dopo 7 giorni (tolleranza per bonifici e addebiti in viaggio) e lo stato pagato/non
+          pagato è sempre quello di <i>oggi</i>: scegliendo un mese passato non si ricostruisce la fotografia di allora.</li>
         <li><b>Commissioni</b>: formule di Notion sulla singola rata (venditore 10%, setter 5%, PM/MB/BS sui rinnovi),
           sommate sugli incassi del mese. Non sono stime.</li>
         <li><b>Costi</b>: registro interno (tab Costi). Una voce mensile conta da <i>data inizio</i> in poi,
