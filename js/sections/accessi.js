@@ -7,6 +7,8 @@
 // non-admin. Nascondere la voce di menu è comodità, non sicurezza.
 import { supabase } from '../supabase.js';
 import { esc } from '../format.js';
+import { nomeDi } from '../data.js';
+import * as team from './team.js';
 
 const SEZIONI = [
   { key: 'panoramica', label: 'Panoramica' },
@@ -48,8 +50,8 @@ function celleVede(u, i) {
   const opt = (val, label) =>
     `<option value="${esc(val)}" ${modo === val ? 'selected' : ''}>${esc(label)}</option>`;
   const opzioni = ['<option value="">Tutti i centri</option>']
-    .concat(CONSULENTI.map(c => opt('c:' + c, 'Consulente: ' + c)))
-    .concat(MEDIA_BUYER.map(m => opt('m:' + m, 'Media buyer: ' + m)))
+    .concat(CONSULENTI.map(c => opt('c:' + c, 'Consulente: ' + nomeDi(c))))
+    .concat(MEDIA_BUYER.map(m => opt('m:' + m, 'Media buyer: ' + nomeDi(m))))
     .concat([opt('picker', 'Solo centri scelti…')]);
   const n = (u._centri ?? u.centri_visibili ?? []).length;
   return `<td><select data-i="${i}" class="ac-vede">${opzioni.join('')}</select>
@@ -63,7 +65,7 @@ function pannelloPicker(u, i) {
     <label class="ac-centro" data-nome="${esc((c.nome || '').toLowerCase())}">
       <input type="checkbox" data-i="${i}" data-id="${c.notion_id}" ${scelti.has(c.notion_id) ? 'checked' : ''}>
       <span>${esc(c.nome || '(senza nome)')}</span>
-      <span class="ac-centro-cons">${esc(c.consulente || '')}</span>
+      <span class="ac-centro-cons">${esc(c.consulente ? nomeDi(c.consulente) : '')}</span>
     </label>`).join('');
   return `<tr class="ac-picker-row"><td colspan="${SEZIONI.length + 5}">
     <div class="ac-picker">
@@ -84,8 +86,7 @@ function disegna() {
         ${u.sezioni.includes(s) ? 'checked' : ''} ${admin ? 'disabled' : ''}></td>`;
       return `<tr>
         <td class="name">${esc(u.email || u.user_id)}</td>
-        <td><input type="text" class="ac-nome" data-i="${i}" maxlength="80"
-             value="${esc(u.nome || '')}" placeholder="Nome e cognome"></td>
+        <td class="ac-nome-ro" title="Il nome si modifica nella tab Team">${esc(u.nome || '—')}</td>
         ${SEZIONI.map(s => cella(s.key)).join('')}
         <td><input type="checkbox" data-i="${i}" data-sez="admin" ${admin ? 'checked' : ''}></td>
         ${celleVede(u, i)}
@@ -102,10 +103,6 @@ function disegna() {
       u.sezioni = cb.checked ? [...new Set([...u.sezioni, sez])] : u.sezioni.filter(s => s !== sez);
       if (sez === 'admin') disegna();   // admin implica tutto: le altre caselle si disabilitano
     };
-  });
-
-  tb.querySelectorAll('input.ac-nome').forEach(inp => {
-    inp.oninput = () => { UTENTI[+inp.dataset.i].nome = inp.value; };
   });
 
   tb.querySelectorAll('select.ac-vede').forEach(sel => {
@@ -160,10 +157,8 @@ function disegna() {
       });
       if (r2.error) { b.disabled = false; msg.textContent = r2.error.message; msg.className = 'ac-msg val-bad'; return; }
 
-      // il nome serve alla sezione Task: senza, si ripiega sulla email
-      const r3 = await supabase.rpc('ms_imposta_nome', { p_user: u.user_id, p_nome: u.nome || null });
+      // il nome NON si scrive più da qui: sta in ms_persona (tab Team)
       b.disabled = false;
-      if (r3.error) { msg.textContent = r3.error.message; msg.className = 'ac-msg val-bad'; return; }
       u.consulente = consulente;
       u.media_buyer = mediaBuyer;
       u.centri_visibili = modo === 'picker' && centri.length ? centri : null;
@@ -174,13 +169,37 @@ function disegna() {
   });
 }
 
-export async function render(mount) {
+// due facce della stessa cosa, entrambe solo-admin: chi c'è (Team) e chi entra
+// e cosa vede (Login e permessi). Il tab sta nell'URL come in Sauron.
+const TABS = [['team', 'Team'], ['login', 'Login e permessi']];
+let TAB = 'team';
+
+export async function render(mount, params) {
+  _mount = mount;
+  TAB = (params && params.tab && TABS.some(t => t[0] === params.tab)) ? params.tab : 'team';
+  mount.innerHTML = `<div class="lead-tabs" id="acTabs">${
+    TABS.map(([k, l]) => `<button data-t="${k}"${k === TAB ? ' class="active"' : ''}>${l}</button>`).join('')
+  }</div><div id="acContent"></div>`;
+  mount.querySelectorAll('#acTabs button').forEach(b => {
+    b.onclick = () => {
+      TAB = b.dataset.t;
+      history.replaceState(null, '', '#/accessi' + (TAB === 'team' ? '' : '?tab=' + TAB));
+      render(mount, { tab: TAB });
+    };
+  });
+  const content = mount.querySelector('#acContent');
+  if (TAB === 'team') return team.render(content);
+  return renderLogin(content);
+}
+
+async function renderLogin(mount) {
   _mount = mount;
   mount.innerHTML = `
     <div class="card">
-      <h2>Accessi</h2>
+      <h2>Login e permessi</h2>
       <div class="subtitle">Chi vede quali sezioni e quali centri. <strong>Admin</strong> vede tutto.
-        Il <strong>Nome</strong> è quello mostrato nella sezione Task (senza, si vede la email).
+        Il <strong>Nome</strong> non si scrive più qui: sta nella tab <strong>Team</strong>, che è
+        l'unica sorgente dei nomi in tutta la dashboard.
         La sezione <strong>Task</strong> non si assegna: ce l'hanno tutti gli utenti attivi.
         La colonna <strong>Vede</strong> limita i dati marketing: "Consulente: …" segue in automatico
         i centri assegnati su Notion; "Solo centri scelti" è la lista fissa per i media buyer.
@@ -202,8 +221,9 @@ export async function render(mount) {
   }
   UTENTI = (utenti.data || []).map(u => ({ ...u, sezioni: Array.isArray(u.sezioni) ? [...u.sezioni] : [] }));
   CENTRI = centri.data || [];
-  CONSULENTI = [...new Set(CENTRI.map(c => c.consulente).filter(Boolean))].sort();
-  MEDIA_BUYER = [...new Set(CENTRI.map(c => c.media_buyer).filter(Boolean))].sort();
+  const perNome = (a, b) => nomeDi(a).localeCompare(nomeDi(b));
+  CONSULENTI = [...new Set(CENTRI.map(c => c.consulente).filter(Boolean))].sort(perNome);
+  MEDIA_BUYER = [...new Set(CENTRI.map(c => c.media_buyer).filter(Boolean))].sort(perNome);
   st.remove();
   disegna();
 }

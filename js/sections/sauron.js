@@ -26,7 +26,7 @@
 // · EBITDA              = ricavi netti − costi correnti − commissioni, ESCLUSI
 //                         investimenti e asset · Cash flow = EBITDA − capex
 import { supabase } from '../supabase.js';
-import { fetchAll } from '../data.js';
+import { fetchAll, nomeDi, personaDi, chiavePersona, personaAttiva } from '../data.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
 import { renderLineChart } from '../charts.js';
 import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, ratio, safeDiv, fmtCompact, dstr, todayRome, esc } from '../format.js';
@@ -1254,18 +1254,18 @@ const RUOLI_CAP = [
 const RUOLO = k => RUOLI_CAP.find(x => x.key === k);
 const NON_ASSEGNATO = '(non assegnato)';
 
-let CAP = new Map();                          // "RUOLO|persona" → capienza
+let CAP = new Map();                          // "RUOLO|persona_id" → capienza
 function rebuildCap() {
   CAP = new Map();
   for (const c of (DATA && DATA.capacita ? DATA.capacita : [])) {
-    CAP.set(c.ruolo + '|' + c.nome, +c.capacita || 0);
+    CAP.set(c.ruolo + '|' + c.persona_id, +c.capacita || 0);
   }
 }
-const capDi = (ruolo, nome) => {
-  const v = CAP.get(ruolo + '|' + nome);
+const capDi = (ruolo, pid) => {
+  const v = CAP.get(ruolo + '|' + pid);
   return v === undefined ? RUOLO(ruolo).def : v;
 };
-const capImpostata = (ruolo, nome) => CAP.has(ruolo + '|' + nome);
+const capImpostata = (ruolo, pid) => CAP.has(ruolo + '|' + pid);
 
 // una riga per persona del ruolo, col suo carico, i suoi rinnovi e la sua capienza
 function caricoPerRuolo(ruolo) {
@@ -1273,9 +1273,19 @@ function caricoPerRuolo(ruolo) {
   const campo = R.campo;
   const perNome = centriByNome();
   const m = new Map();
-  const get = k => {
+  // ⚠️ la chiave è la PERSONA, non il valore grezzo: le due email di Guido devono
+  // fare una riga sola, e "Simone Alessandrini" (che entra dal ripiego sugli
+  // incassi, più sotto) non deve litigare con smnalessandrini@gmail.com.
+  const get = raw => {
+    const k = raw === NON_ASSEGNATO ? NON_ASSEGNATO : chiavePersona(raw);
     let a = m.get(k);
-    if (!a) { a = { pm: k, ruolo, gestiti: 0, attive: 0, operativi: 0, onboarding: 0, attesaRinnovo: 0, persi12m: 0, rinnovi: 0, incassato: 0 }; m.set(k, a); }
+    if (!a) {
+      a = { chiave: k, persona_id: raw === NON_ASSEGNATO ? null : personaDi(raw),
+            pm: raw === NON_ASSEGNATO ? NON_ASSEGNATO : nomeDi(raw), ruolo,
+            gestiti: 0, attive: 0, operativi: 0, onboarding: 0, attesaRinnovo: 0,
+            persi12m: 0, rinnovi: 0, incassato: 0 };
+      m.set(k, a);
+    }
     return a;
   };
   const limite12m = addYm(dstr(todayRome()).slice(0, 7), -11) + '-01';
@@ -1305,7 +1315,7 @@ function caricoPerRuolo(ruolo) {
   return [...m.values()].map(a => {
     // su cosa si misura la capienza di questo ruolo
     a.carico = R.base === 'attive' ? a.attive : (R.base === 'operativo' ? a.operativi : a.gestiti);
-    a.capacita = a.pm === NON_ASSEGNATO ? null : capDi(ruolo, a.pm);
+    a.capacita = a.persona_id === null ? null : capDi(ruolo, a.persona_id);
     a.saturazione = a.capacita > 0 ? a.carico / a.capacita * 100 : null;
     a.perCliente = a.gestiti > 0 ? a.incassato / a.gestiti : null;
     return a;
@@ -1316,7 +1326,8 @@ function caricoPerRuolo(ruolo) {
 function riempimentoRuolo(ruolo) {
   const R = RUOLO(ruolo);
   const righe = caricoPerRuolo(ruolo);
-  const persone = righe.filter(r => r.pm !== NON_ASSEGNATO && (r.gestiti > 0 || capImpostata(ruolo, r.pm)));
+  const persone = righe.filter(r => r.persona_id !== null && personaAttiva(r.persona_id)
+                                    && (r.gestiti > 0 || capImpostata(ruolo, r.persona_id)));
   const posti = persone.reduce((a, r) => a + (r.capacita || 0), 0);
   const assegnati = persone.reduce((a, r) => a + r.carico, 0);
   const senza = righe.filter(r => r.pm === NON_ASSEGNATO).reduce((a, r) => a + r.carico, 0);
@@ -1326,15 +1337,16 @@ function riempimentoRuolo(ruolo) {
 
 const capCol = {
   key: 'capacita', label: 'Capienza (modificabile)',
-  fmt: (v, r) => r.pm === NON_ASSEGNATO ? '—'
+  fmt: (v, r) => r.persona_id === null ? '—'
     : `<input type="number" class="cap-inp" min="0" max="1000" step="1" value="${v}"
-        data-ruolo="${esc(r.ruolo)}" data-nome="${esc(r.pm)}"
+        data-ruolo="${esc(r.ruolo)}" data-persona="${esc(r.persona_id)}"
         title="Quante ${esc(RUOLO(r.ruolo).baseTxt)} può seguire ${esc(r.pm)}">`,
 };
 const colsRuolo = ruolo => {
   const R = RUOLO(ruolo);
   const cols = [
-    { key: 'pm', label: R.label },
+    { key: 'pm', label: R.label, fmt: (v, r) => esc(v) + (r.persona_id === null && v !== NON_ASSEGNATO
+        ? ' <span class="badge-nota" title="Non è ancora in anagrafica: aggiungila in Accessi → Team">non in anagrafica</span>' : '') },
     { key: 'gestiti', label: 'Clienti gestiti', fmt },
     { key: 'operativi', label: 'Portafoglio operativo', fmt },
     { key: 'attive', label: 'Con ADS attive', fmt },
@@ -1353,13 +1365,13 @@ const colsRuolo = ruolo => {
 };
 
 // salvataggio della capienza: upsert su fin_capacita e ridisegno
-async function salvaCapacita(ruolo, nome, valore) {
+async function salvaCapacita(ruolo, persona_id, valore) {
   const n = Math.max(0, Math.min(1000, Math.round(+valore || 0)));
   const { error } = await supabase.from('fin_capacita')
-    .upsert({ ruolo, nome, capacita: n, updated_at: new Date().toISOString() }, { onConflict: 'ruolo,nome' });
+    .upsert({ ruolo, persona_id, capacita: n, updated_at: new Date().toISOString() }, { onConflict: 'ruolo,persona_id' });
   if (error) { alert('Non sono riuscito a salvare la capienza: ' + error.message); return; }
-  DATA.capacita = (DATA.capacita || []).filter(c => !(c.ruolo === ruolo && c.nome === nome))
-    .concat([{ ruolo, nome, capacita: n }]);
+  DATA.capacita = (DATA.capacita || []).filter(c => !(c.ruolo === ruolo && c.persona_id === persona_id))
+    .concat([{ ruolo, persona_id, capacita: n }]);
   rebuildCap();
   renderDelivery();
 }
@@ -1396,7 +1408,9 @@ function renderDelivery() {
   const teamDel = cm.occ.filter(c => (c.reparto || '') === 'Delivery');
   const costoTeam = sumImporti(teamDel);
   const gestiti = rc.gestiti;
-  const nPM = new Set(centriRows().filter(isGestito).map(x => x.consulente).filter(Boolean)).size;
+  // per PERSONA: due email dello stesso PM non sono due project manager
+  const nPM = new Set(centriRows().filter(isGestito).map(x => x.consulente).filter(Boolean)
+    .map(chiavePersona)).size;
   const perRuolo = RUOLI_DELIVERY.map(ru => ({
     ruolo: ru,
     voci: teamDel.filter(c => (c.ruolo || 'Altri ruoli') === ru).length,
@@ -1497,7 +1511,7 @@ function renderDelivery() {
 
   // le capienze si salvano appena esci dal campo (o premi Invio)
   _mount.querySelectorAll('input.cap-inp').forEach(inp => {
-    inp.onchange = () => salvaCapacita(inp.dataset.ruolo, inp.dataset.nome, inp.value);
+    inp.onchange = () => salvaCapacita(inp.dataset.ruolo, inp.dataset.persona, inp.value);
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
     inp.onclick = e => e.stopPropagation();     // non far partire l'ordinamento della riga
   });
@@ -1519,10 +1533,13 @@ function renderDelivery() {
     for (const c of contratti()) {
       if (!hasTag(c.stato, 'RINNOVO')) continue;
       const an = perNome.get(chiave(c.nome_centro));
-      const k = (an && an[campo]) || '(non assegnato)';
-      m.set(k, (m.get(k) || 0) + 1);
+      const raw = (an && an[campo]) || null;
+      const k = raw ? chiavePersona(raw) : '(non assegnato)';
+      const cur = m.get(k) || { nome: raw ? nomeDi(raw) : '(non assegnato)', n: 0 };
+      cur.n += 1;
+      m.set(k, cur);
     }
-    return [...m.entries()].map(([nome, n]) => ({ nome, n })).sort((a, b) => b.n - a.n).slice(0, 10);
+    return [...m.values()].sort((a, b) => b.n - a.n).slice(0, 10);
   };
   const lista = (titolo, rows) => {
     const max = Math.max(...rows.map(r => r.n), 1);
@@ -1578,7 +1595,7 @@ const ltvCols = [
   { key: 'perMese', label: 'Incassato / mese', fmt: v => v === null ? '—' : eur(v) },
   { key: 'primo', label: 'Primo incasso', fmt: dtIt },
   { key: 'ultimo', label: 'Ultimo incasso', fmt: dtIt },
-  { key: 'consulente', label: 'PM', fmt: v => esc(v || '—') },
+  { key: 'consulente', label: 'PM', fmt: v => esc(v ? nomeDi(v) : '—') },
   { key: 'stato', label: 'Stato', fmt: v => v === 'perso' ? '<span class="val-bad">perso</span>' : '<span class="val-good">attivo</span>' },
 ];
 
@@ -1666,7 +1683,7 @@ const EXPORT = {
     nome: 'incassi_' + MESE + '.csv',
     righe: [['ID incasso', 'Centro', 'Consulente', 'Venditore', 'Data incasso', 'Scadenza', 'Importo', 'Rata n°', 'Metodo', 'Tipo contratto', 'Comm. venditore', 'Comm. setter']]
       .concat(incassi().filter(r => ymOf(r.data_incasso) === MESE).map(r => [
-        r.id_incasso, r.centro, r.consulente, r.venditore, r.data_incasso, r.data_scadenza,
+        r.id_incasso, r.centro, nomeDi(r.consulente), nomeDi(r.venditore), r.data_incasso, r.data_scadenza,
         csvNum(r.importo), csvNum(r.rata_numero), r.metodo, (r.tipo_contratto || []).join(' · '),
         csvNum(r.comm_venditore), csvNum(r.comm_setter)])),
   }),
@@ -1674,7 +1691,7 @@ const EXPORT = {
     nome: 'incassi_tutti.csv',
     righe: [['ID incasso', 'Centro', 'Consulente', 'Data incasso', 'Scadenza', 'Importo', 'Rata n°', 'Incassata', 'Metodo', 'Tipo contratto']]
       .concat(incassi().map(r => [
-        r.id_incasso, r.centro, r.consulente, r.data_incasso, r.data_scadenza,
+        r.id_incasso, r.centro, nomeDi(r.consulente), r.data_incasso, r.data_scadenza,
         csvNum(r.importo), csvNum(r.rata_numero), incassata(r) ? 'sì' : 'no', r.metodo,
         (r.tipo_contratto || []).join(' · ')])),
   }),
@@ -1683,7 +1700,7 @@ const EXPORT = {
     righe: [['Centro', 'Scadenza', 'Giorni di ritardo', 'Importo', 'Rata n°', 'Consulente', 'Venditore']]
       .concat(insolute(MESE).righe.map(r => [
         r.centro, r.data_scadenza, giorniRitardo(r.data_scadenza), csvNum(r.importo),
-        csvNum(r.rata_numero), r.consulente, r.venditore])),
+        csvNum(r.rata_numero), nomeDi(r.consulente), nomeDi(r.venditore)])),
   }),
   contratti: () => ({
     nome: 'contratti.csv',

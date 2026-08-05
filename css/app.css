@@ -367,6 +367,72 @@ header::before { /* alone di luce in alto a sinistra */
 .kpi-row.kpi-4 { grid-template-columns: repeat(4, 1fr); }
 @media (max-width: 900px) { .kpi-row.kpi-4 { grid-template-columns: repeat(2, 1fr); } }
 
+/* ── tabella con celle editabili (tab Team) ────────────────────────────── */
+.mt-table { width: 100%; border-collapse: collapse; min-width: 860px; }
+.mt-table th {
+  text-align: left; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); padding: 0 6px 8px; white-space: nowrap;
+}
+.mt-table td { padding: 5px 6px; border-top: 1px solid var(--grid); vertical-align: middle; }
+.mt-table tbody tr:first-child td { border-top: none; }
+.mt-vuoto { color: var(--muted); font-size: 13px; padding: 18px 6px; text-align: center; }
+.cell-inp, .cell-sel {
+  font-family: inherit; font-size: 13px; color: var(--text-primary); width: 100%;
+  background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 7px 9px;
+}
+.cell-inp:hover, .cell-sel:hover { border-color: var(--border); background: var(--surface-1); }
+.cell-inp:focus, .cell-sel:focus { outline: none; border-color: var(--sv-azure); box-shadow: 0 0 0 3px var(--ring); background: var(--surface-1); }
+.cell-sel { cursor: pointer; }
+
+/* ── tab Team ──────────────────────────────────────────────────────────── */
+.tm-chip {
+  display: inline-flex; align-items: center; gap: 5px; margin: 2px 4px 2px 0;
+  padding: 4px 9px; border-radius: 20px; cursor: pointer;
+  background: var(--row-alt); border: 1px solid transparent; color: var(--text-secondary);
+  font-family: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+}
+.tm-chip:hover { border-color: var(--border); color: var(--text-primary); }
+.tm-chip.on { background: rgba(34, 112, 216, 0.12); color: var(--series-1); }
+.tm-chip.alias { cursor: default; font-weight: 500; }
+.tm-chip.alias.da-conf { background: rgba(232, 160, 29, 0.16); color: #9a6a04; }
+.tm-x {
+  border: none; background: none; cursor: pointer; color: inherit; opacity: 0.55;
+  font-size: 11px; line-height: 1; padding: 0 1px;
+}
+.tm-x:hover { opacity: 1; color: var(--bad-text); }
+.tm-add {
+  font-family: inherit; font-size: 12px; color: var(--text-primary); width: 130px;
+  background: transparent; border: 1px dashed var(--border); border-radius: 20px; padding: 4px 10px;
+}
+.tm-add:focus { outline: none; border-style: solid; border-color: var(--sv-azure); }
+/* la larghezza si governa su un DIV dentro la cella: su un <td> il max-width non
+   vale (la tabella dimensiona sul contenuto) e chip e badge sbordano sulla colonna
+   accanto */
+.tm-col { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.tm-col-nome { width: 190px; }
+.tm-col-nome .cell-inp { flex: 1 1 100%; }
+.tm-col-nome .badge-nota { margin: 0; }
+.tm-col-ruoli { width: 260px; }
+.tm-col-alias { width: 300px; }
+.tm-col-alias .tm-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.tm-tipo { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.tm-fonte { font-size: 11.5px; color: var(--muted); }
+.tm-num { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--text-secondary); white-space: nowrap; }
+.tm-login { font-size: 12.5px; color: var(--text-secondary); }
+.tm-azioni { white-space: nowrap; text-align: right; }
+.tm-azioni .tk-btn { margin-left: 4px; }
+.tm-uscito td { opacity: 0.55; }
+.tm-toggle { font-size: 12.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.ac-nome-ro { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+
+/* etichetta d'avviso in riga (es. persona non ancora in anagrafica) */
+.badge-nota {
+  display: inline-block; margin-left: 6px; padding: 2px 7px; border-radius: 20px;
+  background: rgba(232, 160, 29, 0.16); color: #9a6a04;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em; white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) { .badge-nota { color: var(--warn); } }
+
 /* ── tab Marketing: inserimento dati del mese ──────────────────────────── */
 .mm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 18px; }
 .mm-campo { display: flex; flex-direction: column; gap: 6px; }

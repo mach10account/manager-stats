@@ -4,7 +4,7 @@ import { setTrackUser, track } from './track.js';
 import { initFilters, filtroConsulenteUtile } from './filters.js';
 import { startRouter, parseHash, navigate } from './router.js';
 import { initModal } from './modal.js';
-import { loadFreshness, clearCentriCache } from './data.js';
+import { loadFreshness, clearCentriCache, loadPersone } from './data.js';
 import { esc } from './format.js';
 import * as idle from './idle.js?v=1';   // ?v da bumpare quando cambia idle.js
 
@@ -13,7 +13,7 @@ import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';
 import * as vendita from './sections/vendita.js';
-import * as sauron from './sections/sauron.js?v=22';   // ?v da bumpare quando cambia sauron.js (vedi nota in index.html)
+import * as sauron from './sections/sauron.js?v=23';   // ?v da bumpare quando cambia sauron.js (vedi nota in index.html)
 import * as accessi from './sections/accessi.js';
 import * as task from './sections/task.js';
 
@@ -123,6 +123,9 @@ async function showApp(session) {
 async function boot() {
   await caricaPermessi();                      // prima di tutto: decide cosa esiste per questo utente
   initModal();
+  // la mappa email/nome-sporco → nome va caricata PRIMA di disegnare qualsiasi
+  // cosa: nomeDi() è sincrono, e con la mappa vuota si vedrebbero le email
+  await loadPersone();
   await initFilters();                         // popola consulente + range default (no dispatch)
   document.addEventListener('filterchange', () => renderCurrent());
   window.addEventListener('resize', debounce(() => {

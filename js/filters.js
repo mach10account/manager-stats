@@ -1,7 +1,7 @@
 // manager-stats · barra filtri condivisa (preset date Europe/Rome + select consulente)
 // Stato globale {from, to, consulente}; evento 'filterchange' su document.
 import { todayRome, dstr, esc } from './format.js';
-import { loadCentri } from './data.js';
+import { loadCentri, nomeDi } from './data.js';
 
 const state = { from: null, to: null, consulente: '', mediaBuyer: '' };
 
@@ -80,12 +80,16 @@ export async function initFilters() {
   if (sel) sel.onchange = () => { state.consulente = sel.value; dispatch(); };
   if (selMb) selMb.onchange = () => { state.mediaBuyer = selMb.value; dispatch(); };
 
+  // ⚠️ il VALUE resta l'email di centri.*: è la chiave con cui filtrano le
+  // sezioni (r.consulente === f.consulente) e con cui lo scoping fa i suoi join.
+  // Si traduce solo l'etichetta, e si ordina per quella.
   const riempi = (el, campo, etichettaTutti, centri) => {
     const names = [...new Set(centri.map(c => c[campo]).filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b));
+      .map(v => ({ v, l: nomeDi(v) }))
+      .sort((a, b) => a.l.localeCompare(b.l));
     if (el) {
       el.innerHTML = `<option value="">${etichettaTutti}</option>` +
-        names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+        names.map(n => `<option value="${esc(n.v)}">${esc(n.l)}</option>`).join('');
     }
     return names.length > 1;
   };
