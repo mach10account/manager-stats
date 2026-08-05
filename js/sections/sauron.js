@@ -2,7 +2,8 @@
 //
 // Fonti: fin_incassi (1 riga = 1 rata, da Notion 🏦 DATABASE INCASSI),
 // v_notion_contratti (mirror del DATABASE CONTRATTI: 1 riga = 1 contratto vero),
-// fin_costi (voci di costo, EDITABILI qui), centri (anagrafica clienti:
+// fin_costi (voci di costo, EDITABILI qui), fin_pnl (conto economico DICHIARATO
+// dei mesi chiusi, dal foglio "PL Database Input"), centri (anagrafica clienti:
 // churn, ciclo di vita, PM e beauty). Sync WF-M7/WF-M1; RLS solo admin.
 //
 // Tab: Dashboard · Costi · P&L · Delivery · Clienti & LTV · Report.
@@ -68,7 +69,7 @@ const costiSort = {};                        // per reparto
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData() {
-  const [incassi, contratti, centri, costi, capacita, marketing, vendita, funnel] = await Promise.all([
+  const [incassi, contratti, centri, costi, capacita, marketing, vendita, funnel, pnlFoglio] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('fin_incassi')
       .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo,comm_venditore,comm_setter,comm_pm,comm_mb,comm_bs')
       .range(lo, hi)),
@@ -87,6 +88,8 @@ async function buildData() {
     supabase.from('fin_vendita').select('*').then(r => r.data || []).catch(() => []),
     // funnel mensile dal vivo (opportunita' GHL + chiamate setter)
     supabase.rpc('api_fin_marketing_mesi').then(r => r.data || []).catch(() => []),
+    // conto economico DICHIARATO dei mesi chiusi (foglio "PL Database Input")
+    fetchAll((lo, hi) => supabase.from('fin_pnl').select('*').range(lo, hi)),
   ]);
   // dal mirror il venditore arriva come array e il valore come numeric (stringa via
   // PostgREST): qui li riporto alle forme che il resto della sezione si aspetta.
@@ -95,7 +98,7 @@ async function buildData() {
     valore: (c.valore === null || c.valore === undefined) ? null : Number(c.valore),
     venditore: Array.isArray(c.venditore) ? c.venditore.join(', ') : c.venditore,
   }));
-  return { incassi, contratti: contrattiNorm, centri, costi, capacita, marketing, vendita, funnel };
+  return { incassi, contratti: contrattiNorm, centri, costi, capacita, marketing, vendita, funnel, pnlFoglio };
 }
 
 async function ricaricaCosti() {
@@ -254,8 +257,39 @@ function costiMese(m) {
   return { occ, voci, manuali, cat, capex, rimborsi, comm, tot: manuali + rimborsi + comm.tot };
 }
 
-// conto economico per cassa del mese
-function pnl(m) {
+// ── conto economico DICHIARATO (foglio "PL Database Input") ──────────────────
+// Il registro costi fotografa lo stato di OGGI: tutte voci mensili che partono
+// dal 2026-01-01, senza storico. Applicato a un mese chiuso produce numeri che
+// non sono mai esistiti (manca l'ad spend, la parte fissa dei setter, i compensi
+// amministratori, i costi straordinari). Il conto economico vero dei mesi chiusi
+// sta sul foglio, e per quei mesi e' quello che vale — stessa scelta gia' fatta
+// per il Marketing: mese chiuso = foglio, mese in corso = calcolato dal vivo.
+// Riga assente = casella vuota sul foglio; importo 0 = il foglio dice "-".
+const SEZ_PNL = ['ricavi', 'rimborsi', 'diretti', 'operativi', 'strutturali'];
+const vociFoglio = m => (DATA.pnlFoglio || [])
+  .filter(r => r.mese === m).sort((a, b) => a.ordine - b.ordine);
+const sommaSez = (righe, sez) => righe
+  .filter(r => r.sezione === sez && r.tipo === 'voce')
+  .reduce((a, r) => a + (+r.importo || 0), 0);
+
+function foglioPnl(m) {
+  const righe = vociFoglio(m);
+  if (!righe.length) return null;
+  const t = {};
+  for (const s of SEZ_PNL) t[s] = sommaSez(righe, s);
+  const ricaviNetti = t.ricavi - t.rimborsi;
+  const margineLordo = ricaviNetti - t.diretti;
+  const margineOp = margineLordo - t.operativi;
+  return { righe, sez: t, lordi: t.ricavi, rimborsi: t.rimborsi, costiDiretti: t.diretti,
+    operativi: t.operativi, strutturali: t.strutturali, ricaviNetti, margineLordo, margineOp,
+    ebitda: margineOp - t.strutturali, capex: 0, cashFlow: margineOp - t.strutturali,
+    // sul foglio non c'e' una riga capex: cash flow ed EBITDA coincidono
+    costiTot: t.diretti + t.operativi + t.strutturali + t.rimborsi };
+}
+
+// conto economico per cassa del mese.
+// forza = 'calcolato' → ignora il foglio anche dove c'e' (chip nel tab P&L).
+function pnl(m, forza) {
   const s = splitIncassato(m);
   const cm = costiMese(m);
   const ricaviNetti = s.tot - cm.rimborsi;
@@ -263,13 +297,24 @@ function pnl(m) {
   const margineLordo = ricaviNetti - costiDiretti;
   const margineOp = margineLordo - cm.cat.Operativi;
   const ebitda = margineOp - cm.cat.Strutturali;
-  const cashFlow = ebitda - cm.capex;
+  const calcolato = {
+    lordi: s.tot, rimborsi: cm.rimborsi, ricaviNetti, costiDiretti, margineLordo,
+    operativi: cm.cat.Operativi, margineOp, strutturali: cm.cat.Strutturali,
+    ebitda, capex: cm.capex, cashFlow: ebitda - cm.capex, costiTot: cm.tot,
+  };
+  const fg = foglioPnl(m);
+  const daFoglio = !!fg && forza !== 'calcolato';
+  const b = daFoglio ? fg : calcolato;
+  const rn = b.ricaviNetti;
   return {
-    m, s, cm, lordi: s.tot, rimborsi: cm.rimborsi, ricaviNetti, costiDiretti, margineLordo,
-    margineOp, ebitda, cashFlow, contrattualizzato: contrattualizzato(m).tot,
-    pctLordo: ricaviNetti > 0 ? margineLordo / ricaviNetti : null,
-    pctOp: ricaviNetti > 0 ? margineOp / ricaviNetti : null,
-    pctEbitda: ricaviNetti > 0 ? ebitda / ricaviNetti : null,
+    m, s, cm, fg, calcolato, fonte: daFoglio ? 'foglio' : 'calcolato',
+    lordi: b.lordi, rimborsi: b.rimborsi, ricaviNetti: rn, costiDiretti: b.costiDiretti,
+    margineLordo: b.margineLordo, operativi: b.operativi, margineOp: b.margineOp,
+    strutturali: b.strutturali, ebitda: b.ebitda, capex: b.capex, cashFlow: b.cashFlow,
+    costiTot: b.costiTot, contrattualizzato: contrattualizzato(m).tot,
+    pctLordo: rn > 0 ? b.margineLordo / rn : null,
+    pctOp: rn > 0 ? b.margineOp / rn : null,
+    pctEbitda: rn > 0 ? b.ebitda / rn : null,
   };
 }
 
@@ -350,7 +395,12 @@ function renderKPI() {
 
   const p = pnl(MESE);
   const cm = p.cm;
-  const roi = cm.tot > 0 ? p.cashFlow / cm.tot : null;
+  const roi = p.costiTot > 0 ? p.cashFlow / p.costiTot : null;
+  // da dove arriva il conto economico di questo mese: il foglio se c'è, altrimenti
+  // il calcolo su incassi Notion + registro costi. Lo dice ogni tile, così non
+  // sembra che dashboard e tab P&L si contraddicano.
+  const fonteTxt = p.fonte === 'foglio'
+    ? 'dal foglio P&L del mese' : 'da incassi Notion + registro costi';
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
@@ -401,13 +451,19 @@ function renderKPI() {
       tileRiemp(RUOLI_CAP[1]),
       tileRiemp(RUOLI_CAP[2]),
       { label: 'Aziende gestite', value: fmt(gestiti.length), sub: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
-      { label: 'Costi del mese', value: eur(cm.tot),
-        sub: 'voci ' + eur(cm.manuali) + ' + commissioni ' + eur(cm.comm.tot) + (cm.rimborsi > 0 ? ' + rimborsi ' + eur(cm.rimborsi) : '') },
+      { label: 'Costi del mese', value: eur(p.costiTot),
+        sub: p.fonte === 'foglio'
+          ? 'diretti ' + eur(p.costiDiretti) + ' + operativi ' + eur(p.operativi)
+            + ' + strutturali ' + eur(p.strutturali) + ' · ' + fonteTxt
+          : 'voci ' + eur(cm.manuali) + ' + commissioni ' + eur(cm.comm.tot) + (cm.rimborsi > 0 ? ' + rimborsi ' + eur(cm.rimborsi) : '') },
       { label: 'EBITDA', value: eur(p.ebitda), tone: p.ebitda >= 0 ? 'good' : 'bad',
         sub: (p.pctEbitda !== null ? pctFrac(p.pctEbitda) + " dell'incassato netto · " : '')
-          + 'esclusi investimenti e asset' + (cm.capex > 0 ? ' (' + eur(cm.capex) + ')' : '') },
+          + (p.fonte === 'foglio' ? fonteTxt
+            : 'esclusi investimenti e asset' + (cm.capex > 0 ? ' (' + eur(cm.capex) + ')' : '')) },
       { label: 'Margine netto', value: eur(p.cashFlow), tone: p.cashFlow >= 0 ? 'good' : 'bad',
-        sub: 'incassato − tutti i costi del mese, capex e rimborsi inclusi' },
+        sub: p.fonte === 'foglio'
+          ? 'sul foglio non c\'è una riga investimenti: coincide con l\'EBITDA'
+          : 'incassato − tutti i costi del mese, capex e rimborsi inclusi' },
       { label: 'ROI', value: roi === null ? '—' : pctFrac(roi), tone: roi === null ? undefined : (roi >= 0 ? 'good' : 'bad'),
         sub: 'margine netto ÷ costi del mese' },
     ] },
@@ -432,7 +488,7 @@ function trendRows() {
   return { months, rows: months.map(m => {
     const p = pnl(m);                      // EBITDA del mese: stesso calcolo del P&L
     return { incassato: inc.get(m), contrattualizzato: con.get(m), n: nCon.get(m),
-             ebitda: p.ebitda, costi: p.cm.tot, rimborsi: p.rimborsi };
+             ebitda: p.ebitda, costi: p.costiTot, rimborsi: p.rimborsi, fonte: p.fonte };
   }) };
 }
 
@@ -451,7 +507,8 @@ function renderTrend() {
       <div class="t-row"><span>Contrattualizzato</span><b>${eur(r.contrattualizzato)}</b></div>
       <div class="t-row"><span>EBITDA</span><b>${eur(r.ebitda)}</b></div>
       <div class="t-row"><span>Costi del mese</span><b>${eur(r.costi)}</b></div>
-      <div class="t-row"><span>Contratti firmati</span><b>${fmt(r.n)}</b></div>`,
+      <div class="t-row"><span>Contratti firmati</span><b>${fmt(r.n)}</b></div>
+      <div class="t-row"><span>P&L</span><b>${r.fonte === 'foglio' ? 'dal foglio' : 'calcolato'}</b></div>`,
   });
 }
 
@@ -821,25 +878,50 @@ function apriFormCosto(c, repartoDefault) {
 }
 
 // ── tab P&L (conto economico per cassa) ──────────────────────────────────────
+// Due viste della stessa scala:
+//  · FOGLIO — il conto economico dichiarato in "PL Database Input", voce per voce
+//    come lo scrive Leo. E' il dato ufficiale dei mesi chiusi.
+//  · CALCOLATO — ricavi da fin_incassi (Notion) e costi da fin_costi. E' l'unico
+//    possibile sul mese in corso, ma sui mesi chiusi vale poco: il registro costi
+//    non ha storico (tutte voci mensili dal 2026-01-01) e non conosce l'ad spend.
+// In automatico vince il foglio dove c'e'; i chip permettono di forzare l'altra.
+let PNL_VISTA = null;
+
+// quanto pesa la voce `voce` nel mese x (null = riga assente = casella vuota)
+const importoVoce = (x, voce) => {
+  if (!x.fg) return null;
+  const r = x.fg.righe.find(y => y.voce === voce);
+  return r ? (+r.importo || 0) : null;
+};
+// somma delle voci del foglio la cui etichetta combacia con re (per le incidenze)
+const sommaSe = (fg, re) => !fg ? 0 : fg.righe
+  .filter(r => r.tipo === 'voce' && re.test(r.voce))
+  .reduce((a, r) => a + (+r.importo || 0), 0);
+const RE_PERSONALE = /^(Personale:|Commissioni |Bonus pagati)/i;
+const RE_MARKETING = /^(Ad spend|Costo team marketing|Marketing brand)/i;
+
 function renderPnl() {
-  const d = pnl(MESE);
-  const p = pnl(addYm(MESE, -1));
+  const forza = PNL_VISTA === 'calcolato' ? 'calcolato' : undefined;
+  const d = pnl(MESE, forza);
+  const p = pnl(addYm(MESE, -1), forza);
   const rn = d.ricaviNetti;
+  const foglio = d.fonte === 'foglio';
 
   // riga: etichetta | mese | % ricavi netti | mese prima | Δ
-  // segno = true → è un costo, si mostra in negativo e il Δ va letto al contrario
+  // costo = true → si mostra in negativo e il Δ va letto al contrario
+  // valore null (voce non compilata sul foglio) → "—", senza quota né Δ
   const riga = (label, get, opt = {}) => {
     const v = get(d), vp = get(p);
     const f = opt.pct ? (x => x === null ? '—' : pctFrac(x)) : eur;
-    const quota = (!opt.pct && !opt.noQuota && rn > 0) ? pctFrac(Math.abs(v) / rn) : '';
+    const quota = (!opt.pct && !opt.noQuota && rn > 0 && v !== null) ? pctFrac(Math.abs(v) / rn) : '';
     let delta = '';
-    if (!opt.noDelta && vp !== null && vp !== 0 && !opt.pct) {
+    if (!opt.noDelta && v !== null && vp !== null && vp !== 0 && !opt.pct) {
       const dl = 100 * (v - vp) / Math.abs(vp);
       const buono = opt.costo ? dl <= 0 : dl >= 0;
       delta = `<span class="${buono ? 'val-good' : 'val-bad'}">${dl >= 0 ? '+' : ''}${fmt(dl)}%</span>`;
     }
     return `<tr class="${opt.cls || ''}">
-      <td class="name"${opt.indent ? ' style="padding-left:26px;color:var(--muted)"' : ''}>${label}</td>
+      <td class="name"${opt.indent ? ' style="padding-left:26px;color:var(--muted)"' : ''}>${esc(label)}</td>
       <td>${opt.costo && v > 0 ? '−' : ''}${f(v)}</td>
       <td class="fn-quota">${quota}</td>
       <td class="fn-quota">${opt.costo && vp > 0 ? '−' : ''}${f(vp)}</td>
@@ -847,28 +929,88 @@ function renderPnl() {
   };
   const testa = t => `<tr class="fn-head"><td colspan="5">${t}</td></tr>`;
 
-  const cm = d.cm;
-  const persCost = sumImporti(cm.voci.filter(c =>
-    (c.reparto === 'Delivery' || c.reparto === 'Commerciale' ||
-     String(c.sottocategoria || '').toLowerCase().indexOf('personale') !== -1))) + cm.comm.tot;
-  const costoMkt = sumImporti(cm.voci.filter(c => c.reparto === 'Marketing'));
-  const fissi = cm.cat.Operativi + cm.cat.Strutturali;
-  const breakEven = d.pctLordo > 0.05 ? (fissi + cm.rimborsi) / d.pctLordo : null;
+  // voci del foglio da stampare: unione dei due mesi, nell'ordine del foglio —
+  // così una riga che c'è solo nel mese prima resta comunque confrontabile
+  const unione = new Map();
+  for (const r of [...(d.fg ? d.fg.righe : []), ...(p.fg ? p.fg.righe : [])])
+    if (!unione.has(r.voce)) unione.set(r.voce, r);
+  const vociSez = sez => [...unione.values()]
+    .filter(r => r.sezione === sez).sort((a, b) => a.ordine - b.ordine);
+  const bloccoSez = (titolo, sez, opt) =>
+    testa(titolo) + vociSez(sez)
+      .map(r => riga(r.voce, x => importoVoce(x, r.voce),
+                     r.tipo === 'dettaglio' ? { indent: true } : opt)).join('');
 
-  const topCosti = costiRaggruppati(cm).slice(0, 12);
+  const cm = d.cm;
+  const persCost = foglio
+    ? sommaSe(d.fg, RE_PERSONALE)
+    : sumImporti(cm.voci.filter(c =>
+        (c.reparto === 'Delivery' || c.reparto === 'Commerciale' ||
+         String(c.sottocategoria || '').toLowerCase().indexOf('personale') !== -1))) + cm.comm.tot;
+  const costoMkt = foglio ? sommaSe(d.fg, RE_MARKETING)
+                          : sumImporti(cm.voci.filter(c => c.reparto === 'Marketing'));
+  const fissi = d.operativi + d.strutturali;
+  const breakEven = d.pctLordo > 0.05 ? (fissi + d.rimborsi) / d.pctLordo : null;
+
+  // "Dove vanno i soldi": dal foglio sono le sue stesse voci di costo,
+  // altrimenti il registro raggruppato per ruolo
+  const topCosti = (foglio
+    ? ['diretti', 'operativi', 'strutturali']
+        .flatMap(s => d.fg.righe.filter(r => r.sezione === s && r.tipo === 'voce'))
+        .map(r => ({ etichetta: r.voce, importo: +r.importo || 0, n: 1 }))
+        .filter(x => x.importo > 0.5).sort((a, b) => b.importo - a.importo)
+    : costiRaggruppati(cm)).slice(0, 12);
   const maxCosto = topCosti.length ? topCosti[0].importo : 1;
+
+  // crediti fuori P&L: le righe informative in fondo al foglio
+  const info = d.fg ? d.fg.righe.filter(r => r.sezione === 'info' && (+r.importo || 0) > 0) : [];
+
+  // riconciliazione foglio ↔ app: sono due fonti diverse, le differenze contano
+  const commFoglio = sommaSe(d.fg, /^Commissioni /i);
+  const conf = !d.fg ? [] : [
+    ['Cash incassato', d.fg.lordi, d.calcolato.lordi, 'foglio vs somma delle rate con data incasso nel mese (Notion)'],
+    ['Rimborsi e storni', d.fg.rimborsi, d.calcolato.rimborsi, 'sul registro costi sono le voci con sottocategoria "Rimborsi"'],
+    ['Commissioni', commFoglio, cm.comm.tot, 'foglio vs formule commissione di Notion (venditore + setter + PM/MB/BS)'],
+    ['Costi totali', d.fg.costiTot, d.calcolato.costiTot, 'tutto quello che esce nel mese, rimborsi inclusi'],
+    ['EBITDA', d.fg.ebitda, d.calcolato.ebitda, 'il numero che finisce in Dashboard e nel grafico 12 mesi'],
+  ];
 
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnPnlKpi"></div>
 
     <div class="card">
       <h2>Conto economico (per cassa) — ${ymLabel(MESE)}</h2>
-      <div class="subtitle">Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato).
-        La colonna <strong>% ricavi</strong> è sull'incassato netto; il <strong>Δ</strong> confronta col mese precedente
-        (verde = va nella direzione giusta, anche quando è un costo che scende).</div>
+      <div class="lead-tabs" id="fnPnlFonte">
+        <button data-v="foglio">Foglio P&L</button>
+        <button data-v="calcolato">Calcolato (Notion + registro costi)</button>
+      </div>
+      <div class="subtitle">${foglio
+        ? `Numeri <strong>dichiarati</strong> sul foglio "PL Database Input", voce per voce come stanno lì.
+           Sui mesi chiusi è il dato ufficiale: il registro costi dell'app non ha storico
+           (nessuna riga per l'ad spend, la parte fissa dei setter, i compensi amministratori)
+           e da solo darebbe un margine gonfiato.`
+        : `Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato); costi dal registro.
+           ${d.fg ? 'Vista forzata: per questo mese <strong>esiste</strong> anche il conto economico del foglio.'
+                  : 'Per questo mese <strong>non c\'è ancora</strong> una colonna sul foglio P&L.'}`}
+        La colonna <strong>% ricavi</strong> è sull'incassato netto; il <strong>Δ</strong> confronta col mese
+        precedente (verde = va nella direzione giusta, anche quando è un costo che scende).</div>
       <div class="table-scroll"><table class="fn-pnl">
         <thead><tr><th>Voce</th><th>${ymLabel(MESE)}</th><th>% ricavi</th><th>${ymLabel(addYm(MESE, -1))}</th><th>Δ</th></tr></thead>
         <tbody>
+          ${foglio ? `
+          ${bloccoSez('Ricavi — cash incassato', 'ricavi')}
+          ${bloccoSez('Storni e rimborsi', 'rimborsi', { costo: true })}
+          ${riga('RICAVI NETTI', x => x.ricaviNetti, { cls: 'fn-tot' })}
+          ${bloccoSez('Costi diretti (variabili con il fatturato)', 'diretti', { costo: true })}
+          ${riga('MARGINE LORDO', x => x.margineLordo, { cls: 'fn-tot' })}
+          ${riga('% Margine lordo', x => x.pctLordo, { pct: true, noDelta: true })}
+          ${bloccoSez('Costi operativi (struttura — fissi)', 'operativi', { costo: true })}
+          ${riga('MARGINE OPERATIVO', x => x.margineOp, { cls: 'fn-tot' })}
+          ${riga('% Margine operativo', x => x.pctOp, { pct: true, noDelta: true })}
+          ${bloccoSez('Costi strutturali (azienda, soci)', 'strutturali', { costo: true })}
+          ${riga('MARGINE NETTO (EBITDA)', x => x.ebitda, { cls: 'fn-tot' })}
+          ${riga('% Margine netto', x => x.pctEbitda, { pct: true, noDelta: true })}
+          ` : `
           ${testa('Ricavi — cash incassato')}
           ${riga('Cash incassato (totale)', x => x.lordi, { cls: 'fn-tot' })}
           ${riga('di cui: prime rate (nuovi clienti)', x => x.s.nuovi, { indent: true })}
@@ -896,31 +1038,60 @@ function renderPnl() {
           ${testa('Investimenti e asset')}
           ${riga('Investimenti + asset', x => x.cm.capex, { costo: true })}
           ${riga('CASH FLOW (margine netto)', x => x.cashFlow, { cls: 'fn-tot' })}
+          `}
         </tbody>
       </table></div>
+      ${info.length ? `<div class="subtitle" style="margin-top:10px">Fuori dal P&L, dal foglio:
+        ${info.map(r => esc(r.voce) + ' <strong>' + eur(+r.importo) + '</strong>').join(' · ')}.</div>` : ''}
     </div>
 
     <div class="kpi-row" id="fnPnlInc"></div>
 
+    ${conf.length ? `
+    <div class="card">
+      <h2>Foglio e app a confronto — ${ymLabel(MESE)}</h2>
+      <div class="subtitle">Le due fonti non devono per forza coincidere: il foglio è la cassa come la vede
+        l'amministrazione, l'app somma il registro rate di Notion e il registro costi. Le differenze grosse
+        sono un buon posto dove cercare rate mancanti o costi mai registrati.</div>
+      <div class="table-scroll"><table class="fn-pnl">
+        <thead><tr><th>Voce</th><th>Foglio</th><th>Calcolato dall'app</th><th>Δ</th><th>Come leggerla</th></tr></thead>
+        <tbody>${conf.map(([lab, a, b, nota]) => `
+          <tr><td class="name">${esc(lab)}</td><td>${eur(a)}</td><td>${eur(b)}</td>
+            <td><span class="${Math.abs(a - b) < 1 ? '' : (a - b >= 0 ? 'val-good' : 'val-bad')}">${
+              (a - b >= 0 ? '+' : '−') + eur(Math.abs(a - b))}</span></td>
+            <td class="fn-nota">${esc(nota)}</td></tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>` : ''}
+
     <div class="card">
       <h2>Dove vanno i soldi — ${ymLabel(MESE)}</h2>
-      <div class="subtitle">Le 12 voci più pesanti del mese, commissioni incluse.
-        Il personale è unito per ruolo: una riga per i project manager, una per i media buyer e così via
-        (il dettaglio persona per persona è nella tab Costi).</div>
+      <div class="subtitle">${foglio
+        ? 'Le 12 voci di costo più pesanti del foglio, così come sono scritte lì.'
+        : `Le 12 voci più pesanti del mese, commissioni incluse.
+           Il personale è unito per ruolo: una riga per i project manager, una per i media buyer e così via
+           (il dettaglio persona per persona è nella tab Costi).`}</div>
       ${topCosti.length ? topCosti.map(x => `
         <div class="esito-row">
           <div class="esito-top"><span class="lbl">${esc(x.etichetta)}${x.n > 1 ? ` <span style="color:var(--muted);font-weight:400">· ${x.n} persone</span>` : ''}</span>
-            <span class="val"><b>${eur(x.importo)}</b> · ${fmtPct(pct(x.importo, cm.tot))}</span></div>
+            <span class="val"><b>${eur(x.importo)}</b> · ${fmtPct(pct(x.importo, d.costiTot))}</span></div>
           <div class="esito-track"><div class="esito-fill" style="width:${Math.max(2, Math.round(100 * x.importo / maxCosto))}%;background:var(--series-1)"></div></div>
         </div>`).join('') : '<div class="status">Nessun costo nel mese.</div>'}
     </div>`;
 
+  _mount.querySelectorAll('#fnPnlFonte button').forEach(b => {
+    b.classList.toggle('active', b.dataset.v === d.fonte);
+    b.onclick = () => { PNL_VISTA = b.dataset.v; renderPnl(); };
+  });
+
   renderKpiRow(_mount.querySelector('#fnPnlKpi'), [
-    { label: 'Fatturato contrattualizzato', value: eur(d.contrattualizzato), sub: 'valore dei contratti firmati nel mese' },
+    { label: 'Fatturato contrattualizzato', value: eur(d.contrattualizzato), sub: 'valore dei contratti firmati nel mese (Notion)' },
     { label: 'Ricavi netti (cassa)', value: eur(rn), sub: 'incassato − rimborsi' },
     { label: 'Margine lordo', value: eur(d.margineLordo), sub: d.pctLordo === null ? '' : pctFrac(d.pctLordo) + ' dei ricavi netti' },
-    { label: 'EBITDA', value: eur(d.ebitda), sub: d.pctEbitda === null ? '' : pctFrac(d.pctEbitda) + ' dei ricavi netti' },
-    { label: 'Cash flow', value: eur(d.cashFlow), sub: 'dopo investimenti e asset' },
+    { label: 'Margine operativo', value: eur(d.margineOp), sub: d.pctOp === null ? '' : pctFrac(d.pctOp) + ' dei ricavi netti' },
+    { label: foglio ? 'Margine netto (EBITDA)' : 'EBITDA', value: eur(d.ebitda),
+      tone: d.ebitda >= 0 ? 'good' : 'bad',
+      sub: d.pctEbitda === null ? '' : pctFrac(d.pctEbitda) + ' dei ricavi netti' },
   ]);
 
   renderKpiRow(_mount.querySelector('#fnPnlInc'), [
@@ -929,10 +1100,10 @@ function renderPnl() {
     { label: 'Incidenza costi fissi', value: rn > 0 ? pctFrac(fissi / rn) : '—',
       sub: 'operativi + strutturali sui ricavi netti' },
     { label: 'Incidenza marketing', value: rn > 0 ? pctFrac(costoMkt / rn) : '—',
-      sub: eur(costoMkt) + ' di spese marketing registrate' },
+      sub: eur(costoMkt) + (foglio ? ' fra ad spend e team marketing' : ' di spese marketing registrate') },
     { label: 'Break even incassi', value: breakEven === null ? '—' : eur(breakEven),
       sub: 'incasso che copre i costi fissi, al margine lordo del mese' },
-    { label: 'Costi totali', value: eur(cm.tot), sub: 'tutto quello che è uscito nel mese' },
+    { label: 'Costi totali', value: eur(d.costiTot), sub: 'tutto quello che è uscito nel mese' },
   ]);
 }
 
@@ -1766,22 +1937,25 @@ const EXPORT = {
     return {
       nome: 'pnl_12_mesi_al_' + MESE + '.csv',
       righe: [['Voce'].concat(ms.map(d => d.m)),
+        ['Fonte'].concat(ms.map(d => d.fonte === 'foglio' ? 'foglio P&L' : 'Notion + registro costi')),
         riga('Cash incassato', d => d.lordi),
-        riga('di cui prime rate (nuovi clienti)', d => d.s.nuovi),
-        riga('di cui rate', d => d.s.rate),
-        riga('di cui rinnovi', d => d.s.rinnovi),
-        riga('di cui upsell', d => d.s.upsell),
+        // le "di cui" restano sempre lo spacchettamento Notion: sul foglio ci sono
+        // solo su alcuni mesi e con un taglio diverso (prime rate / rate vecchie)
+        riga('di cui prime rate (nuovi clienti) — Notion', d => d.s.nuovi),
+        riga('di cui rate — Notion', d => d.s.rate),
+        riga('di cui rinnovi — Notion', d => d.s.rinnovi),
+        riga('di cui upsell — Notion', d => d.s.upsell),
         riga('Rimborsi', d => d.rimborsi),
         riga('Ricavi netti', d => d.ricaviNetti),
-        riga('Commissioni', d => d.cm.comm.tot),
-        riga('Altri costi diretti', d => d.cm.cat.Diretti),
+        riga('Costi diretti', d => d.costiDiretti),
         riga('Margine lordo', d => d.margineLordo),
-        riga('Costi operativi', d => d.cm.cat.Operativi),
+        riga('Costi operativi', d => d.operativi),
         riga('Margine operativo', d => d.margineOp),
-        riga('Costi strutturali', d => d.cm.cat.Strutturali),
-        riga('EBITDA', d => d.ebitda),
-        riga('Investimenti e asset', d => d.cm.capex),
+        riga('Costi strutturali', d => d.strutturali),
+        riga('EBITDA (margine netto)', d => d.ebitda),
+        riga('Investimenti e asset', d => d.capex),
         riga('Cash flow', d => d.cashFlow),
+        riga('Costi totali', d => d.costiTot),
         riga('Contrattualizzato', d => d.contrattualizzato)],
     };
   },
@@ -1834,8 +2008,18 @@ function renderReport() {
           sommate sugli incassi del mese. Non sono stime.</li>
         <li><b>Costi</b>: registro interno (tab Costi). Una voce mensile conta da <i>data inizio</i> in poi,
           una annua nello stesso mese di ogni anno, una tantum solo nel suo mese.</li>
-        <li><b>EBITDA</b>: ricavi netti − costi correnti − commissioni, <b>esclusi</b> investimenti e asset.
-          <b>Cash flow / margine netto</b>: EBITDA meno gli investimenti.</li>
+        <li><b>P&amp;L — quale fonte</b>: per i mesi che stanno sul foglio <b>"PL Database Input"</b> il conto
+          economico è quello <b>dichiarato lì</b> (aprile → luglio 2026), voce per voce: è il dato ufficiale, e
+          anche EBITDA, margine netto, costi del mese e grafico 12 mesi in Dashboard leggono da lì.
+          Per gli altri mesi vale il <b>calcolo</b>: incassi Notion − registro costi. La differenza non è cosmetica —
+          il registro costi fotografa lo <i>stato di oggi</i> (voci mensili tutte dal 1° gennaio 2026) e non conosce
+          l'ad spend Meta, la parte fissa dei setter, i compensi amministratori né i costi straordinari, quindi sui
+          mesi chiusi darebbe un margine gonfiato. Nel tab P&amp;L i chip permettono di vedere l'altra versione e
+          c'è la tabella di riconciliazione fra le due.</li>
+        <li><b>EBITDA</b>: dal foglio è la riga MARGINE NETTO (ricavi netti − diretti − operativi − strutturali);
+          calcolato è ricavi netti − costi correnti − commissioni, <b>esclusi</b> investimenti e asset.
+          <b>Cash flow / margine netto</b>: EBITDA meno gli investimenti — sul foglio non c'è una riga
+          investimenti, quindi coincidono.</li>
         <li><b>Clienti persi</b>: DATA CLIENTE PERSO su Notion DATABASE CLIENTI, nel mese.</li>
         <li><b>Riempimento team</b>: carico assegnato ÷ somma delle <b>capienze che imposti tu</b> nella tab Delivery,
           una per persona. Il carico cambia col ruolo: per <b>project manager</b> e <b>media buyer</b> è il

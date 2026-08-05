@@ -816,6 +816,11 @@ select.ac-vede {
 }
 .fn-pnl tr.fn-tot td { font-weight: 700; border-top: 1px solid var(--baseline); }
 .fn-pnl td.fn-quota { color: var(--muted); }
+/* riconciliazione foglio ↔ app: l'ultima colonna è una nota, non un numero */
+.fn-pnl td.fn-nota {
+  color: var(--muted); font-size: 12px; text-align: left;
+  white-space: normal; min-width: 220px; max-width: 380px;
+}
 /* capienza per persona, modificabile dentro le tabelle Delivery */
 .cap-inp {
   width: 66px; padding: 3px 6px; font: inherit; font-size: 13px; text-align: right;
