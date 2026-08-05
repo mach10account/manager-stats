@@ -136,7 +136,7 @@ function disegnaPersone() {
   el.innerHTML = `
     <thead><tr>
       <th>Nome</th><th>Ruoli</th><th>Email e nomi collegati</th>
-      <th>Centri</th><th>Login</th><th>Nel team</th><th></th>
+      <th>Telefono</th><th>Centri</th><th>Login</th><th>Nel team</th><th></th>
     </tr></thead>
     <tbody>${righe.map(p => {
       const centri = [
@@ -157,6 +157,7 @@ function disegnaPersone() {
             ${esc(a.valore)}<button class="tm-x" data-chiave="${esc(a.chiave)}" title="Stacca">✕</button></span>`).join('')}
           <input class="tm-add" placeholder="+ email o nome">
         </div></td>
+        <td><input class="cell-inp tm-tel" value="${esc(p.telefono || '')}" placeholder="+39…"></td>
         <td class="tm-num">${esc(centri || '—')}</td>
         <td>${p.login_email
           ? `<span class="tm-login">${esc(p.login_email)}</span>`
@@ -174,6 +175,7 @@ function disegnaPersone() {
     const id = tr.dataset.id;
     tr.querySelector('.tm-nome').onchange = e => salva(id, { p_nome: e.target.value });
     tr.querySelector('.tm-attivo').onchange = e => salva(id, { p_attivo: e.target.checked });
+    tr.querySelector('.tm-tel').onchange = e => salva(id, { p_telefono: e.target.value });
     tr.querySelectorAll('.tm-chip[data-ruolo]').forEach(b => {
       b.onclick = () => {
         const p = PERSONE.find(x => x.id === id);
@@ -240,6 +242,7 @@ async function creaDaOrfano(o) {
 function apriInvito(p) {
   if (!p) return;
   const mailSuggerita = (p.alias || []).filter(a => a.tipo === 'email').map(a => a.valore)[0] || '';
+  const telSuggerito = p.telefono || '';
   const ov = document.createElement('div');
   ov.className = 'modal-overlay';
   ov.innerHTML = `
@@ -256,7 +259,7 @@ function apriInvito(p) {
             <option value="email">Email</option>
             <option value="link">Solo il link, lo mando io</option>
           </select></label>
-        <label class="tk-campo tk-largo" id="tmInvTelWrap">Telefono<input type="tel" id="tmInvTel" placeholder="333 1234567"></label>
+        <label class="tk-campo tk-largo" id="tmInvTelWrap">Telefono<input type="tel" id="tmInvTel" value="${esc(telSuggerito)}" placeholder="333 1234567"></label>
       </div>
       <div class="tm-invito-esito" id="tmInvEsito"></div>
       <div class="tk-azioni tk-azioni-form">
