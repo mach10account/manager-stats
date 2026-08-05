@@ -29,7 +29,7 @@ import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
 import { renderLineChart } from '../charts.js';
-import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, safeDiv, dstr, todayRome, esc } from '../format.js';
+import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, ratio, safeDiv, fmtCompact, dstr, todayRome, esc } from '../format.js';
 
 let DATA = null;          // { incassi, contratti, centri, costi }
 let _mount = null;
@@ -65,13 +65,14 @@ const TABS = [
   ['dash', 'Dashboard'], ['costi', 'Costi'], ['pnl', 'P&L'], ['marketing', 'Marketing'],
   ['delivery', 'Delivery'], ['clienti', 'Clienti & LTV'], ['report', 'Report'],
 ];
+let mktSort = { key: 'mese', dir: -1 };
 let ruoloSort = { PM: { key: 'gestiti', dir: -1 }, BEAUTY: { key: 'gestiti', dir: -1 }, MEDIA_BUYER: { key: 'gestiti', dir: -1 } };
 let ltvSort = { key: 'incassato', dir: -1 };
 const costiSort = {};                        // per reparto
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData() {
-  const [incassi, contratti, centri, costi, capacita, mktSpesa, mktContatti, pnlFoglio] = await Promise.all([
+  const [incassi, contratti, centri, costi, capacita, mktMese, pnlFoglio] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('fin_incassi')
       .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo,comm_venditore,comm_setter,comm_pm,comm_mb,comm_bs')
       .range(lo, hi)),
@@ -85,9 +86,8 @@ async function buildData() {
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_capacita').select('*').range(lo, hi)),
-    // tab Marketing: spesa per settimana e contatti, scritti a mano da qui
-    supabase.from('fin_mkt_spesa').select('*').then(r => r.data || []).catch(() => []),
-    fetchAll((lo, hi) => supabase.from('fin_mkt_contatti').select('*').range(lo, hi)),
+    // tab Marketing: i dati del mese, scritti a mano da lì (1 riga = 1 mese)
+    supabase.from('fin_mkt_mese').select('*').then(r => r.data || []).catch(() => []),
     // conto economico DICHIARATO dei mesi chiusi (foglio "PL Database Input")
     fetchAll((lo, hi) => supabase.from('fin_pnl').select('*').range(lo, hi)),
   ]);
@@ -107,7 +107,7 @@ async function buildData() {
   const incassiNorm = incassi.map(r => (r.data_scadenza || !r.data_incasso)
     ? r
     : { ...r, data_scadenza: r.data_incasso, scadenza_da_incasso: true });
-  return { incassi: incassiNorm, contratti: contrattiNorm, centri, costi, capacita, mktSpesa, mktContatti, pnlFoglio };
+  return { incassi: incassiNorm, contratti: contrattiNorm, centri, costi, capacita, mktMese, pnlFoglio };
 }
 
 async function ricaricaCosti() {
@@ -517,7 +517,7 @@ function renderTrend() {
     { key: 'contrattualizzato', color: '--series-2', name: 'Contrattualizzato' },
     { key: 'ebitda', color: '--series-3', name: 'EBITDA' },
   ], {
-    xlab: ymShort, yfmt: eur, height: 280,
+    xlab: ymShort, yfmt: eur, axisFmt: fmtCompact, height: 280,
     tip: (r, m) => `<div class="t-date">${ymLabel(m)}</div>
       <div class="t-row"><span>Incassato</span><b>${eur(r.incassato)}</b></div>
       <div class="t-row"><span>Contrattualizzato</span><b>${eur(r.contrattualizzato)}</b></div>
@@ -982,180 +982,252 @@ function renderPnl() {
 }
 
 // ── tab Marketing ────────────────────────────────────────────────────────────
-// Rifatto sul prototipo "Cassetto Pieno" (pagina Campagne Meta): quattro numeri,
-// la spesa per settimana, la lista dei contatti generati dalle campagne.
-// Qui NON c'è nessuna fonte automatica, si scrive tutto a mano:
-//   · fin_mkt_spesa    → 1 riga = 1 mese, s1..s5 = la spesa di ogni settimana
-//   · fin_mkt_contatti → 1 riga = 1 contatto
-// I quattro KPI non si salvano da nessuna parte: si ricalcolano da quello che
-// c'è scritto qui sotto, così non possono dire una cosa diversa dalla tabella.
-const ESITI = ['Da contattare', 'Contattato', 'Appuntamento fissato', 'Non risponde',
-               'Non interessato', 'Cliente acquisito'];
-const ESITO_CLASSE = {
-  'Da contattare': 'es-new', 'Contattato': 'es-contact', 'Appuntamento fissato': 'es-appt',
-  'Non risponde': 'es-noans', 'Non interessato': 'es-notint', 'Cliente acquisito': 'es-won',
-};
-const SETT = ['s1', 's2', 's3', 's4', 's5'];
+// Una sola cosa si scrive a mano: i dati del mese. Tutto il resto della pagina
+// (KPI, funnel, grafico, tabella) si calcola da lì e non si salva da nessuna
+// parte, così non può mai raccontare qualcosa di diverso da ciò che è inserito.
+// Fonte unica: fin_mkt_mese, 1 riga = 1 mese.
+const MKT_CAMPI = [
+  { k: 'budget_meta',    l: 'Budget Meta €' },
+  { k: 'budget_google',  l: 'Budget Google €' },
+  { k: 'impressioni',    l: 'Impressioni' },
+  { k: 'click',          l: 'Click' },
+  { k: 'lead',           l: 'Lead' },
+  { k: 'contatti',       l: 'Contatti' },
+  { k: 'app_fissati',    l: 'Appuntamenti fissati' },
+  { k: 'show_up',        l: 'Show up' },
+  { k: 'trial',          l: 'Trial' },
+  { k: 'clienti_chiusi', l: 'Clienti chiusi' },
+  { k: 'fatturato',      l: 'Fatturato generato €' },
+  { k: 'incasso',        l: 'Incasso generato €' },
+];
+const TARGET_CAC = 800;                       // costo per cliente oltre il quale la tile diventa rossa
 
-const rigaSpesa = m => (DATA.mktSpesa || []).find(r => r.mese === m) || null;
-const contattiDi = m => (DATA.mktContatti || []).filter(r => r.mese === m);
-const spesaTot = r => SETT.reduce((a, k) => a + (+(r || {})[k] || 0), 0);
+const rigaMkt = m => (DATA.mktMese || []).find(r => r.mese === m) || null;
+// numeri del mese: solo divisioni sui campi inseriti, mai valori inventati.
+// Se manca il numeratore o il denominatore il KPI resta null → "—", non zero.
+function mktKpi(m) {
+  const r = rigaMkt(m);
+  const n = k => (r && r[k] !== null && r[k] !== undefined && r[k] !== '') ? +r[k] : null;
+  const k = { mese: m, vuoto: !r };
+  MKT_CAMPI.forEach(c => { k[c.k] = n(c.k); });
+  k.budget = (k.budget_meta === null && k.budget_google === null)
+    ? null : (k.budget_meta || 0) + (k.budget_google || 0);
+  const q = (a, b) => (a === null || b === null || !(b > 0)) ? null : a / b;
+  k.cpl      = q(k.budget, k.lead);
+  k.cpm      = k.impressioni > 0 && k.budget !== null ? k.budget / k.impressioni * 1000 : null;
+  k.ctr      = q(k.click, k.impressioni);
+  k.cac      = q(k.budget, k.clienti_chiusi);
+  k.risposta = q(k.contatti, k.lead);
+  k.roas     = q(k.fatturato, k.budget);
+  k.roi      = (k.incasso === null || !(k.budget > 0)) ? null : (k.incasso - k.budget) / k.budget;
+  k.booking  = q(k.app_fissati, k.contatti);
+  k.showRate = q(k.show_up, k.app_fissati);
+  k.trialRate = q(k.trial, k.show_up);
+  k.closing  = q(k.clienti_chiusi, k.trial);
+  k.ticket   = q(k.fatturato, k.clienti_chiusi);
+  return k;
+}
+const mesiMkt = () => (DATA.mktMese || []).map(r => r.mese).sort();
 
 const MKT_HTML = `
   <div class="sm-head">
     <div>
-      <h2 class="sm-title">Campagne Meta</h2>
-      <div class="sm-sub">Spesa pubblicitaria e contatti generati in <span id="mkMese"></span>.
-        Su questa pagina si scrive tutto a mano: i quattro numeri qui sotto si ricalcolano da soli.</div>
+      <h2 class="sm-title">Marketing — <span id="mkMese"></span></h2>
+      <div class="sm-sub">Scrivi i dati del mese qui sotto: KPI, funnel, grafico e tabella
+        si riempiono da soli con quello che inserisci.</div>
     </div>
   </div>
 
-  <div class="kpi-row" id="mkKpi"></div>
+  <div class="card">
+    <h2>Inserimento dati mese</h2>
+    <div class="subtitle">Si salva da solo appena esci da una casella. Lascia vuoto ciò che non hai:
+      un campo vuoto non vale zero, i KPI che dipendono da lui restano "—".</div>
+    <div class="mm-grid" id="mkForm"></div>
+  </div>
+
+  <div class="kpi-row kpi-4" id="mkKpi"></div>
 
   <div class="card">
-    <h2>Spesa per settimana</h2>
-    <div class="subtitle">Scrivi quanto è stato speso in ogni settimana del mese: le barre e la spesa
-      totale si aggiornano appena esci dalla casella. La quinta settimana lasciala vuota se non c'è.</div>
-    <div class="sp-bars" id="mkBarre"></div>
+    <h2>Funnel</h2>
+    <div class="subtitle">Dal lead al cliente, con la percentuale che passa da un gradino all'altro.</div>
+    <div class="funnel" id="mkFunnel"></div>
+    <div class="funnel-kpis" id="mkFunnelKpi"></div>
   </div>
 
   <div class="card">
-    <h2>Contatti generati</h2>
-    <div class="subtitle">Un contatto per riga. L'esito muove i numeri in cima alla pagina:
-      "Appuntamento fissato" conta negli appuntamenti, ogni riga conta come lead.</div>
-    <div class="table-scroll"><table class="mt-table" id="mkContatti"></table></div>
-    <button class="mt-add" id="mkAdd">+ Aggiungi contatto</button>
+    <h2>Andamento 12 mesi</h2>
+    <div class="subtitle">Budget speso e fatturato generato, mese per mese.</div>
+    <div class="legend">
+      <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Budget</span>
+      <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Fatturato generato</span>
+    </div>
+    <div class="chart-wrap"><svg id="mkTrend" width="100%" height="280"></svg></div>
+  </div>
+
+  <div class="card">
+    <h2>Mese per mese</h2>
+    <div class="subtitle">Tutti i mesi inseriti, con i KPI ricalcolati riga per riga.</div>
+    <div class="table-scroll"><table id="mkTabella"></table></div>
   </div>`;
 
 function renderMarketing() {
   _mount.querySelector('#fnContent').innerHTML = MKT_HTML;
   _mount.querySelector('#mkMese').textContent = ymLabel(MESE);
+  renderMktForm();
   renderMktKpi();
-  renderMktSpesa();
-  renderMktContatti();
-  _mount.querySelector('#mkAdd').onclick = nuovoContatto;
+  renderMktFunnel();
+  renderMktTrend();
+  renderMktTabella();
+}
+
+function renderMktForm() {
+  const el = _mount.querySelector('#mkForm');
+  if (!el) return;
+  const r = rigaMkt(MESE) || {};
+  el.innerHTML = MKT_CAMPI.map(c => `
+    <label class="mm-campo">
+      <span>${c.l}</span>
+      <input class="mm-inp" data-k="${c.k}" inputmode="decimal" placeholder="0"
+        value="${r[c.k] === null || r[c.k] === undefined ? '' : r[c.k]}">
+    </label>`).join('');
+  el.querySelectorAll('.mm-inp').forEach(inp => {
+    inp.onchange = () => salvaMkt(inp.dataset.k, inp.value);
+  });
 }
 
 function renderMktKpi() {
   const el = _mount.querySelector('#mkKpi');
   if (!el) return;
-  const righe = contattiDi(MESE);
-  const spesa = spesaTot(rigaSpesa(MESE));
-  const app = righe.filter(r => r.esito === 'Appuntamento fissato').length;
-  const acquisiti = righe.filter(r => r.esito === 'Cliente acquisito').length;
+  const k = mktKpi(MESE);
+  const cacTono = k.cac === null ? undefined : (k.cac <= TARGET_CAC ? 'good' : 'bad');
   renderKpiRow(el, [
-    { label: 'Spesa totale', value: eur(spesa), info: 'Somma delle settimane scritte qui sotto.' },
-    { label: 'Lead generati', value: fmt(righe.length), info: 'Una riga della tabella = un lead.' },
-    { label: 'Costo per lead', value: righe.length ? eur2(spesa / righe.length) : '—',
-      info: 'Spesa totale ÷ contatti in tabella. Resta "—" finché non c\'è nessun contatto.' },
-    { label: 'Appuntamenti fissati', value: fmt(app),
-      info: 'Contatti con esito "Appuntamento fissato"' + (acquisiti > 0
-        ? '. I ' + acquisiti + ' già diventati clienti non sono qui dentro: hanno il loro esito.' : '.') },
+    { label: 'Budget totale', value: eur(k.budget), info: 'Budget Meta + Budget Google del mese.' },
+    { label: 'CPL', value: k.cpl === null ? '—' : eur2(k.cpl), info: 'Budget totale ÷ lead: quanto costa un lead.' },
+    { label: 'CPM', value: k.cpm === null ? '—' : eur2(k.cpm), info: 'Costo di mille impressioni: budget ÷ impressioni × 1.000.' },
+    { label: 'CTR', value: k.ctr === null ? '—' : pctFrac(k.ctr), info: 'Click ÷ impressioni: quanta parte di chi vede l\'annuncio ci clicca.' },
+    { label: 'CAC', value: k.cac === null ? '—' : eur(k.cac), tone: cacTono,
+      sub: 'target ' + eur(TARGET_CAC),
+      info: 'Budget totale ÷ clienti chiusi. Diventa rosso sopra il target di ' + eur(TARGET_CAC) + '.' },
+    { label: 'Tasso risposta', value: k.risposta === null ? '—' : pctFrac(k.risposta),
+      info: 'Contatti ÷ lead: quanti lead si riescono a raggiungere davvero.' },
+    { label: 'ROAS', value: k.roas === null ? '—' : ratio(k.roas),
+      info: 'Fatturato generato (' + eur(k.fatturato) + ') ÷ budget: quante volte torna indietro quello che si spende.' },
+    { label: 'ROI', value: k.roi === null ? '—' : pctFrac(k.roi),
+      tone: k.roi === null ? undefined : (k.roi >= 0 ? 'good' : 'bad'),
+      info: 'Sul CASSA, non sul contrattualizzato: (incasso generato − budget) ÷ budget.' },
   ]);
 }
 
-// barre + caselle: una colonna per settimana, l'altezza è in proporzione
-// alla settimana più cara del mese
-function renderMktSpesa() {
-  const el = _mount.querySelector('#mkBarre');
+function renderMktFunnel() {
+  const el = _mount.querySelector('#mkFunnel');
+  const elK = _mount.querySelector('#mkFunnelKpi');
   if (!el) return;
-  const r = rigaSpesa(MESE) || {};
-  const max = Math.max(...SETT.map(k => +r[k] || 0), 1);
-  el.innerHTML = SETT.map((k, i) => {
-    const v = +r[k] || 0;
-    return `<div class="sp-col">
-      <div class="sp-val">${v > 0 ? eur(v) : ''}</div>
-      <div class="sp-track">${v > 0
-        ? `<div class="sp-bar" style="height:${Math.max(v / max * 100, 3)}%"></div>` : ''}</div>
-      <div class="sp-lab">Sett. ${i + 1}</div>
-      <input class="sp-inp" data-k="${k}" inputmode="decimal" placeholder="0"
-        value="${r[k] === null || r[k] === undefined ? '' : r[k]}">
-    </div>`;
+  const k = mktKpi(MESE);
+  const stadi = [
+    { nome: 'Lead', val: k.lead },
+    { nome: 'Contatti', val: k.contatti },
+    { nome: 'Appuntamenti fissati', val: k.app_fissati },
+    { nome: 'Show up', val: k.show_up },
+    { nome: 'Trial', val: k.trial },
+    { nome: 'Clienti chiusi', val: k.clienti_chiusi },
+  ];
+  if (!stadi.some(s => s.val !== null)) {
+    el.innerHTML = '<div class="status">Inserisci i dati del mese.</div>';
+    elK.innerHTML = '';
+    return;
+  }
+  const base = k.lead;
+  const q = (a, b) => (a === null || b === null || !(b > 0)) ? null : a / b;
+  el.innerHTML = stadi.map((s, i) => {
+    const step = i > 0 ? `<div class="f-step">↓ ${pctFrac(q(s.val, stadi[i - 1].val))}</div>` : '';
+    const w = base > 0 ? Math.max((s.val || 0) / base * 100, 2.5) : 2.5;
+    return `${step}
+      <div class="f-label"><span class="f-name">${s.nome}</span>
+        <span class="f-val">${fmt(s.val)}</span>
+        <span class="f-share">${pctFrac(q(s.val, base))}</span></div>
+      <div class="f-bar f-bar-${Math.min(i + 1, 5)}" style="width:${w}%"></div>`;
   }).join('');
-  el.querySelectorAll('.sp-inp').forEach(inp => {
-    inp.onchange = () => salvaSpesa(inp.dataset.k, inp.value);
-  });
+  const box = (l, v, s) => `<div class="f-kpi"><span class="f-kpi-label">${l}</span>
+    <span class="f-kpi-val">${v}</span><span class="f-kpi-sub">${s}</span></div>`;
+  elK.innerHTML =
+    box('Da contatto ad appuntamento', pctFrac(k.booking), 'appuntamenti ÷ contatti') +
+    box('Show up', pctFrac(k.showRate), 'presentati ÷ appuntamenti') +
+    box('Da show up a trial', pctFrac(k.trialRate), 'trial ÷ presentati') +
+    box('Closing', pctFrac(k.closing), 'clienti ÷ trial') +
+    box('Ticket medio', eur(k.ticket), 'fatturato ÷ clienti') +
+    box('Costo per cliente', k.cac === null ? '—' : eur(k.cac), 'budget ÷ clienti');
 }
 
-function renderMktContatti() {
-  const el = _mount.querySelector('#mkContatti');
+function renderMktTrend() {
+  const el = _mount.querySelector('#mkTrend');
   if (!el) return;
-  const righe = contattiDi(MESE)
-    .slice()
-    .sort((a, b) => (a.data || '9999') < (b.data || '9999') ? -1 : 1);
-  el.innerHTML = `
-    <thead><tr>
-      <th>Nome</th><th>Telefono</th><th>Data</th><th>Trattamento richiesto</th>
-      <th>Esito</th><th>Note</th><th></th>
-    </tr></thead>
-    <tbody>
-      ${righe.length ? righe.map(r => `
-        <tr data-id="${r.id}">
-          <td><input class="cell-inp" data-c="nome" value="${esc(r.nome || '')}" placeholder="Nome e cognome"></td>
-          <td><input class="cell-inp" data-c="telefono" value="${esc(r.telefono || '')}" placeholder="Telefono"></td>
-          <td><input class="cell-inp" data-c="data" type="date" value="${esc(r.data || '')}"></td>
-          <td><input class="cell-inp" data-c="trattamento" value="${esc(r.trattamento || '')}" placeholder="Trattamento"></td>
-          <td><select class="cell-sel ${ESITO_CLASSE[r.esito] || 'es-new'}" data-c="esito">
-            ${ESITI.map(e => `<option${e === r.esito ? ' selected' : ''}>${e}</option>`).join('')}
-          </select></td>
-          <td><input class="cell-inp" data-c="note" value="${esc(r.note || '')}" placeholder="Note…"></td>
-          <td><button class="cell-del" title="Elimina il contatto">✕</button></td>
-        </tr>`).join('')
-      : `<tr><td colspan="7" class="mt-vuoto">Nessun contatto per ${ymLabel(MESE)}.
-           Aggiungine uno col pulsante qui sotto.</td></tr>`}
-    </tbody>`;
-
-  el.querySelectorAll('tr[data-id]').forEach(tr => {
-    const id = tr.dataset.id;
-    tr.querySelectorAll('.cell-inp, .cell-sel').forEach(c => {
-      c.onchange = () => salvaContatto(id, c.dataset.c, c.value);
-    });
-    tr.querySelector('.cell-del').onclick = () => eliminaContatto(id);
+  const primo = mesiMkt()[0];
+  const months = [];
+  for (let i = 11; i >= 0; i--) { const m = addYm(MESE, -i); if (!primo || m >= primo) months.push(m); }
+  if (!months.length) { el.innerHTML = ''; return; }
+  const rows = months.map(m => {
+    const k = mktKpi(m);
+    return { ...k, bud: k.budget || 0, fat: k.fatturato || 0 };
+  });
+  renderLineChart(el, months, rows, [
+    { key: 'bud', color: '--series-1', name: 'Budget' },
+    { key: 'fat', color: '--series-2', name: 'Fatturato generato' },
+  ], {
+    xlab: ymShort, yfmt: eur, axisFmt: fmtCompact, height: 280,
+    tip: (r, m) => `<div class="t-date">${ymLabel(m)}</div>
+      <div class="t-row"><span>Budget</span><b>${eur(r.budget)}</b></div>
+      <div class="t-row"><span>Fatturato</span><b>${eur(r.fatturato)}</b></div>
+      <div class="t-row"><span>Lead</span><b>${fmt(r.lead)}</b></div>
+      <div class="t-row"><span>CPL</span><b>${r.cpl === null ? '—' : eur2(r.cpl)}</b></div>
+      <div class="t-row"><span>Clienti chiusi</span><b>${fmt(r.clienti_chiusi)}</b></div>
+      <div class="t-row"><span>ROAS</span><b>${r.roas === null ? '—' : ratio(r.roas)}</b></div>`,
   });
 }
 
-// ── scritture (stesso schema di fin_costi/fin_capacita: salva, aggiorna DATA,
-//    ridisegna — niente refetch, la pagina è già quello che c'è nel database)
-async function salvaSpesa(campo, valore) {
-  const v = valore.trim() === '' ? null : Math.max(0, +String(valore).replace(',', '.') || 0);
-  const riga = { ...(rigaSpesa(MESE) || {}), mese: MESE, [campo]: v, agg_at: new Date().toISOString() };
-  const { error } = await supabase.from('fin_mkt_spesa').upsert(riga, { onConflict: 'mese' });
-  if (error) { alert('Non sono riuscito a salvare la spesa: ' + error.message); return; }
-  DATA.mktSpesa = (DATA.mktSpesa || []).filter(r => r.mese !== MESE).concat([riga]);
-  renderMktKpi();
-  renderMktSpesa();
+const mktCols = [
+  { key: 'mese', label: 'Mese', fmt: v => ymLabel(v) },
+  { key: 'budget', label: 'Budget', fmt: eur },
+  { key: 'impressioni', label: 'Impressioni', fmt },
+  { key: 'ctr', label: 'CTR', fmt: pctFrac },
+  { key: 'lead', label: 'Lead', fmt },
+  { key: 'cpl', label: 'CPL', fmt: v => v === null ? '—' : eur2(v) },
+  { key: 'contatti', label: 'Contatti', fmt },
+  { key: 'app_fissati', label: 'App. fissati', fmt },
+  { key: 'show_up', label: 'Show up', fmt },
+  { key: 'trial', label: 'Trial', fmt },
+  { key: 'clienti_chiusi', label: 'Clienti', fmt },
+  { key: 'cac', label: 'CAC', fmt: eur },
+  { key: 'fatturato', label: 'Fatturato', fmt: eur },
+  { key: 'incasso', label: 'Incasso', fmt: eur },
+  { key: 'roas', label: 'ROAS', fmt: ratio },
+  { key: 'roi', label: 'ROI', fmt: pctFrac },
+];
+
+function renderMktTabella() {
+  const el = _mount.querySelector('#mkTabella');
+  if (!el) return;
+  const rows = mesiMkt().map(mktKpi).reverse();
+  if (!rows.length) {
+    el.innerHTML = '<div class="status">Ancora nessun mese inserito.</div>';
+    return;
+  }
+  renderTable(el, mktCols, rows, mktSort,
+    k => { mktSort = { key: k, dir: mktSort.key === k ? -mktSort.dir : -1 }; renderMktTabella(); },
+    { barKey: 'budget' });
 }
 
-async function salvaContatto(id, campo, valore) {
-  const v = valore === '' ? null : valore;
-  const { error } = await supabase.from('fin_mkt_contatti')
-    .update({ [campo]: v, agg_at: new Date().toISOString() }).eq('id', id);
-  if (error) { alert('Non sono riuscito a salvare il contatto: ' + error.message); return; }
-  const r = (DATA.mktContatti || []).find(x => x.id === id);
-  if (r) r[campo] = v;
+// scrittura: upsert della riga del mese, poi si ridisegna tutto quello che
+// dipende da lei (stesso schema di fin_costi/fin_capacita, niente refetch)
+async function salvaMkt(campo, valore) {
+  const v = String(valore).trim() === '' ? null : Math.max(0, +String(valore).replace(',', '.') || 0);
+  const riga = { ...(rigaMkt(MESE) || {}), mese: MESE, [campo]: v, agg_at: new Date().toISOString() };
+  const { error } = await supabase.from('fin_mkt_mese').upsert(riga, { onConflict: 'mese' });
+  if (error) { alert('Non sono riuscito a salvare: ' + error.message); return; }
+  DATA.mktMese = (DATA.mktMese || []).filter(r => r.mese !== MESE).concat([riga]);
   renderMktKpi();
-  if (campo === 'esito') renderMktContatti();   // cambia il colore della pillola
-}
-
-async function nuovoContatto() {
-  const { data, error } = await supabase.from('fin_mkt_contatti')
-    .insert({ mese: MESE, esito: 'Da contattare' }).select().single();
-  if (error) { alert('Non sono riuscito ad aggiungere il contatto: ' + error.message); return; }
-  DATA.mktContatti = (DATA.mktContatti || []).concat([data]);
-  renderMktKpi();
-  renderMktContatti();
-  const ultima = _mount.querySelector(`#mkContatti tr[data-id="${data.id}"] .cell-inp`);
-  if (ultima) ultima.focus();
-}
-
-async function eliminaContatto(id) {
-  const r = (DATA.mktContatti || []).find(x => x.id === id);
-  if (!confirm('Elimino il contatto' + (r && r.nome ? ' "' + r.nome + '"' : '') + '?')) return;
-  const { error } = await supabase.from('fin_mkt_contatti').delete().eq('id', id);
-  if (error) { alert('Non sono riuscito a eliminare il contatto: ' + error.message); return; }
-  DATA.mktContatti = (DATA.mktContatti || []).filter(x => x.id !== id);
-  renderMktKpi();
-  renderMktContatti();
+  renderMktFunnel();
+  renderMktTrend();
+  renderMktTabella();
 }
 
 
@@ -1834,6 +1906,6 @@ export async function render(mount, params) {
 
 export function onResize() {
   if (!DATA || !_mount) return;
-  // le barre del Marketing sono CSS: si ridimensionano da sole
   if (_mount.querySelector('#fnTrend')) renderTrend();
+  if (_mount.querySelector('#mkTrend')) renderMktTrend();
 }
