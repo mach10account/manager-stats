@@ -62,9 +62,6 @@ const TABS = [
 // tab Marketing: quale fonte mostrare. null = automatico (mesi chiusi dal foglio
 // ufficiale, mese in corso dal vivo); 'foglio'/'live' = scelta esplicita dai chip.
 let MKT_VISTA = null;
-let centroSort = { key: 'incassato', dir: -1 };
-let contrattiSort = { key: 'valore', dir: -1 };
-let insSort = { key: 'data_scadenza', dir: 1 };
 let ruoloSort = { PM: { key: 'gestiti', dir: -1 }, BEAUTY: { key: 'gestiti', dir: -1 }, MEDIA_BUYER: { key: 'gestiti', dir: -1 } };
 let ltvSort = { key: 'incassato', dir: -1 };
 const costiSort = {};                        // per reparto
@@ -523,116 +520,8 @@ function renderTrend() {
   });
 }
 
-// ── tabella: incassi del mese per centro ─────────────────────────────────────
-const centroCols = [
-  { key: 'centro', label: 'Centro' },
-  { key: 'consulente', label: 'Consulente', fmt: v => esc(v || '—') },
-  { key: 'nRate', label: 'Rate incassate', fmt },
-  { key: 'incassato', label: 'Incassato', fmt: eur },
-  { key: 'daIncassare', label: 'Da incassare nel mese', fmt: v => v > 0 ? eur(v) : '—' },
-];
-
-function centroRows() {
-  const m = new Map();
-  const get = r => {
-    const k = r.centro || '(senza centro)';
-    let a = m.get(k);
-    if (!a) { a = { centro: k, consulente: r.consulente || null, nRate: 0, incassato: 0, daIncassare: 0 }; m.set(k, a); }
-    if (!a.consulente && r.consulente) a.consulente = r.consulente;
-    return a;
-  };
-  for (const r of incassi()) {
-    if (ymOf(r.data_incasso) === MESE) { const a = get(r); a.nRate += 1; a.incassato += (+r.importo || 0); }
-    if (ymOf(r.data_scadenza) === MESE && !incassata(r)) get(r).daIncassare += (+r.importo || 0);
-  }
-  return [...m.values()];
-}
-
-function renderCentri() {
-  const el = _mount.querySelector('#fnCentri');
-  if (!el) return;
-  const rows = centroRows();
-  if (!rows.length) { el.innerHTML = '<div class="status">Nessun incasso nel mese selezionato.</div>'; return; }
-  renderTable(el, centroCols, rows, centroSort,
-    k => { centroSort = { key: k, dir: centroSort.key === k ? -centroSort.dir : -1 }; renderCentri(); },
-    { barKey: 'incassato' });
-}
-
-// ── tabella: contratti firmati nel mese ──────────────────────────────────────
-const contrattiCols = [
-  { key: 'nome_centro', label: 'Centro' },
-  { key: 'creazione_contratto', label: 'Firmato il', fmt: dtIt },
-  { key: 'valore', label: 'Valore', fmt: eur },
-  { key: 'statoTxt', label: 'Tipo / stato', fmt: v => esc(v || '—') },
-  { key: 'durataTxt', label: 'Durata (gg)', fmt: v => esc(v || '—') },
-  { key: 'venditore', label: 'Venditore', fmt: v => esc(v || '—') },
-];
-
-function renderContratti() {
-  const el = _mount.querySelector('#fnContratti');
-  if (!el) return;
-  const rows = contratti()
-    .filter(c => ymOf(c.creazione_contratto) === MESE)
-    .map(c => ({ ...c, statoTxt: (c.stato || []).join(' · '), durataTxt: (c.durata || []).join(' · ') }));
-  if (!rows.length) { el.innerHTML = '<div class="status">Nessun contratto creato nel mese selezionato.</div>'; return; }
-  renderTable(el, contrattiCols, rows, contrattiSort,
-    k => { contrattiSort = { key: k, dir: contrattiSort.key === k ? -contrattiSort.dir : -1 }; renderContratti(); },
-    { barKey: 'valore' });
-}
-
-// ── tabella: rate insolute ───────────────────────────────────────────────────
+// giorni di ritardo di una rata scaduta: serve all'export CSV della lista di recupero
 const giorniRitardo = iso => Math.floor((todayRome() - new Date(iso + 'T00:00:00')) / 86400000);
-const insCols = [
-  { key: 'centro', label: 'Centro', fmt: v => esc(v || '—') },
-  { key: 'data_scadenza', label: 'Scadenza', fmt: dtIt },
-  { key: 'ritardo', label: 'Ritardo', fmt: v => fmt(v) + ' gg' },
-  { key: 'importo', label: 'Importo', fmt: eur },
-  { key: 'rata_numero', label: 'Rata n°', fmt: v => v === null || v === undefined ? '—' : fmt(v) },
-  { key: 'consulente', label: 'Consulente', fmt: v => esc(v || '—') },
-  { key: 'venditore', label: 'Venditore', fmt: v => esc(v || '—') },
-];
-
-// insoluto per mese di scadenza, ultimi 12 mesi: la lettura "com'è andato quel mese",
-// senza l'arretrato dei mesi precedenti che schiaccia sempre la percentuale.
-function renderInsoluteMensile() {
-  const el = _mount.querySelector('#fnInsMensile');
-  if (!el) return;
-  const righe = [];
-  for (let i = 11; i >= 0; i--) {
-    const m = addYm(MESE, -i);
-    const x = insolute(m, true);
-    righe.push({ m, scadute: x.scadute, non: x.nonIncassate, n: x.nNonIncassate, p: pct(x.nonIncassate, x.scadute) });
-  }
-  const tot = righe.reduce((a, r) => ({ scadute: a.scadute + r.scadute, non: a.non + r.non, n: a.n + r.n }),
-    { scadute: 0, non: 0, n: 0 });
-  el.innerHTML = `
-    <thead><tr><th>Mese di scadenza</th><th>Scaduto</th><th>Incassato</th><th>Mai incassato</th><th>Rate</th><th>% insoluto</th></tr></thead>
-    <tbody>
-      ${righe.map(r => `<tr>
-        <td class="name">${ymLabel(r.m)}</td>
-        <td>${eur(r.scadute)}</td>
-        <td>${eur(r.scadute - r.non)}</td>
-        <td>${r.non > 0 ? `<span class="val-bad">${eur(r.non)}</span>` : '—'}</td>
-        <td>${r.n > 0 ? fmt(r.n) : '—'}</td>
-        <td>${fmtPct(r.p)}</td></tr>`).join('')}
-      <tr class="fn-tot">
-        <td class="name">Totale 12 mesi</td>
-        <td>${eur(tot.scadute)}</td>
-        <td>${eur(tot.scadute - tot.non)}</td>
-        <td>${eur(tot.non)}</td>
-        <td>${fmt(tot.n)}</td>
-        <td>${fmtPct(pct(tot.non, tot.scadute))}</td></tr>
-    </tbody>`;
-}
-
-function renderInsolute() {
-  const el = _mount.querySelector('#fnInsolute');
-  if (!el) return;
-  const rows = insolute(MESE).righe.map(r => ({ ...r, ritardo: giorniRitardo(r.data_scadenza) }));
-  if (!rows.length) { el.innerHTML = '<div class="status">Nessuna rata scaduta e non incassata. 🎉</div>'; return; }
-  renderTable(el, insCols, rows, insSort,
-    k => { insSort = { key: k, dir: insSort.key === k ? -insSort.dir : -1 }; renderInsolute(); });
-}
 
 // ── tab Dashboard ────────────────────────────────────────────────────────────
 const DASH_HTML = `
@@ -650,48 +539,14 @@ const DASH_HTML = `
       <span class="key"><span class="swatch" style="background:var(--series-3)"></span>EBITDA</span>
     </div>
     <div class="chart-wrap"><svg id="fnTrend" width="100%" height="280"></svg></div>
-  </div>
-
-  <div class="card">
-    <h2>Incassi del mese per centro</h2>
-    <div class="subtitle">Rate incassate nel mese selezionato (per data incasso) e, per gli stessi centri,
-      le rate in scadenza nel mese non ancora incassate.</div>
-    <div class="table-scroll"><table id="fnCentri"></table></div>
-  </div>
-
-  <div class="card">
-    <h2>Contratti firmati nel mese</h2>
-    <div class="subtitle">Dal DATABASE VALORE CONTRATTI, per data di creazione del contratto.</div>
-    <div class="table-scroll"><table id="fnContratti"></table></div>
-  </div>
-
-  <div class="card">
-    <h2>Insoluto mese per mese</h2>
-    <div class="subtitle">Ultimi 12 mesi fino a <span id="fnInsMeseLabel"></span>, per <strong>mese di scadenza</strong>:
-      quanto è arrivato a scadenza e quanto di quello non è ancora entrato, alla data di oggi.
-      Sul mese in corso contano solo le rate scadute da oltre 7 giorni.</div>
-    <div class="table-scroll"><table class="fn-pnl" id="fnInsMensile"></table></div>
-  </div>
-
-  <div class="card">
-    <h2>Rate scadute e non incassate</h2>
-    <div class="subtitle">La lista da lavorare per il recupero: <strong>tutte</strong> le rate scadute da
-      oltre 7 giorni e mai incassate, dall'inizio fino alla fine del mese selezionato — non solo quelle del mese.</div>
-    <div class="table-scroll"><table id="fnInsolute"></table></div>
   </div>`;
 
 function renderDash() {
   _mount.querySelector('#fnContent').innerHTML = DASH_HTML;
   const lab = _mount.querySelector('#fnMeseLabel');
   if (lab) lab.textContent = ymLabel(MESE);
-  const labIns = _mount.querySelector('#fnInsMeseLabel');
-  if (labIns) labIns.textContent = ymLabel(MESE);
   renderKPI();
   renderTrend();
-  renderCentri();
-  renderContratti();
-  renderInsoluteMensile();
-  renderInsolute();
 }
 
 // ── tab Costi ────────────────────────────────────────────────────────────────
@@ -2010,10 +1865,10 @@ function renderReport() {
           ci sono anche le prime rate dei rinnovi e degli upsell, che qui hanno la loro tile.
           Le <b>rate</b> sono le successive alla prima, sempre al netto di rinnovi e upsell: così le quattro
           voci del gruppo sommano esattamente all'incassato del mese.</li>
-        <li><b>Insolute (&gt;7gg)</b>: due letture diverse. La <b>tile</b> e la tabella "mese per mese" guardano solo
-          le rate con DATA SCADENZA <i>in quel mese</i>: quanto è scaduto e quanto di quello non è ancora entrato.
-          La <b>lista di recupero</b> in fondo è invece cumulativa, dall'inizio a oggi. In entrambe una rata conta
-          come scaduta solo dopo 7 giorni (tolleranza per bonifici e addebiti in viaggio) e lo stato pagato/non
+        <li><b>Insolute (&gt;7gg)</b>: due letture diverse. La <b>tile</b> guarda solo le rate con DATA SCADENZA
+          <i>in quel mese</i>: quanto è scaduto e quanto di quello non è ancora entrato. L'<b>arretrato</b> nel suo
+          sottotitolo — e l'export "Rate scadute e non incassate" qui sotto — è invece cumulativo, dall'inizio
+          a oggi. In entrambi una rata conta come scaduta solo dopo 7 giorni (tolleranza per bonifici e addebiti in viaggio) e lo stato pagato/non
           pagato è sempre quello di <i>oggi</i>: scegliendo un mese passato non si ricostruisce la fotografia di allora.</li>
         <li><b>Rate senza DATA SCADENZA</b>: quando su Notion la scadenza è vuota vale la <b>data di incasso</b>.
           Sono quasi sempre prime rate e acconti pagati alla firma, dove la scadenza non viene compilata perché
