@@ -273,6 +273,36 @@ function pnl(m) {
   };
 }
 
+// "Dove vanno i soldi": una riga per RUOLO, non per persona. Con una riga a testa
+// i 5 project manager e i 3 media buyer si prendevano 8 delle 12 posizioni con
+// importi piccoli, e il costo vero del reparto non si vedeva. Il dettaglio per
+// persona resta nella tab Costi.
+function costiRaggruppati(cm) {
+  const gruppi = new Map();
+  const somma = (chiave, etichetta, importo) => {
+    let g = gruppi.get(chiave);
+    if (!g) { g = { etichetta, importo: 0, n: 0 }; gruppi.set(chiave, g); }
+    g.importo += importo;
+    g.n += 1;
+  };
+  if (cm.comm.tot > 0.5) somma('comm', 'Commissioni vendita (auto)', cm.comm.tot);
+  for (const c of cm.occ) {
+    const imp = +c.importo || 0;
+    if (imp <= 0.5) continue;
+    const sotto = String(c.sottocategoria || '');
+    if (c.reparto === 'Delivery') {
+      const ruolo = c.ruolo || 'Altri ruoli';
+      somma('ruolo:' + ruolo, ruolo, imp);
+    } else if (sotto.toLowerCase().indexOf('personale') === 0) {
+      // il personale fuori dal Delivery sta nella sottocategoria: "Personale: Admin / HR"
+      somma('pers:' + sotto, sotto.replace(/^Personale:\s*/i, '') || 'Personale', imp);
+    } else {
+      somma('voce:' + (c.id || c.descrizione), c.descrizione + (sotto ? ' · ' + sotto : ''), imp);
+    }
+  }
+  return [...gruppi.values()].sort((a, b) => b.importo - a.importo);
+}
+
 // ── KPI dashboard ────────────────────────────────────────────────────────────
 function renderKPI() {
   // mese in corso = confronto ad armi pari: il mese prima viene tagliato allo
@@ -825,11 +855,8 @@ function renderPnl() {
   const fissi = cm.cat.Operativi + cm.cat.Strutturali;
   const breakEven = d.pctLordo > 0.05 ? (fissi + cm.rimborsi) / d.pctLordo : null;
 
-  const topCosti = [['Commissioni vendita (auto)', cm.comm.tot]]
-    .concat(cm.occ.filter(c => +c.importo > 0).map(c =>
-      [c.descrizione + (c.sottocategoria ? ' · ' + c.sottocategoria : ''), +c.importo]))
-    .filter(x => x[1] > 0.5).sort((a, b) => b[1] - a[1]).slice(0, 12);
-  const maxCosto = topCosti.length ? topCosti[0][1] : 1;
+  const topCosti = costiRaggruppati(cm).slice(0, 12);
+  const maxCosto = topCosti.length ? topCosti[0].importo : 1;
 
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnPnlKpi"></div>
@@ -877,12 +904,14 @@ function renderPnl() {
 
     <div class="card">
       <h2>Dove vanno i soldi — ${ymLabel(MESE)}</h2>
-      <div class="subtitle">Le 12 voci più pesanti del mese, commissioni incluse.</div>
-      ${topCosti.length ? topCosti.map(([l, v]) => `
+      <div class="subtitle">Le 12 voci più pesanti del mese, commissioni incluse.
+        Il personale è unito per ruolo: una riga per i project manager, una per i media buyer e così via
+        (il dettaglio persona per persona è nella tab Costi).</div>
+      ${topCosti.length ? topCosti.map(x => `
         <div class="esito-row">
-          <div class="esito-top"><span class="lbl">${esc(l)}</span>
-            <span class="val"><b>${eur(v)}</b> · ${fmtPct(pct(v, cm.tot))}</span></div>
-          <div class="esito-track"><div class="esito-fill" style="width:${Math.max(2, Math.round(100 * v / maxCosto))}%;background:var(--series-1)"></div></div>
+          <div class="esito-top"><span class="lbl">${esc(x.etichetta)}${x.n > 1 ? ` <span style="color:var(--muted);font-weight:400">· ${x.n} persone</span>` : ''}</span>
+            <span class="val"><b>${eur(x.importo)}</b> · ${fmtPct(pct(x.importo, cm.tot))}</span></div>
+          <div class="esito-track"><div class="esito-fill" style="width:${Math.max(2, Math.round(100 * x.importo / maxCosto))}%;background:var(--series-1)"></div></div>
         </div>`).join('') : '<div class="status">Nessun costo nel mese.</div>'}
     </div>`;
 
