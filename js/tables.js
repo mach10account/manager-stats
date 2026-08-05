@@ -43,10 +43,11 @@ export function renderTable(el, cols, rows, sort, onSort, opts = {}) {
   }
 }
 
-// tiles: [{ label, value, sub }]
+// tiles: [{ label, value, sub, info }] — info = ⓘ in hover, come nei gruppi
 export function renderKpiRow(el, tiles) {
   el.innerHTML = tiles.map(x =>
-    `<div class="tile"><div class="label">${x.label}</div><div class="value">${x.value}</div><div class="sub">${x.sub || ''}</div></div>`
+    `<div class="tile"><div class="label">${x.info ? labelConInfo(x.label, x.info) : x.label}</div>
+      <div class="value">${x.value}</div>${x.sub ? `<div class="sub">${x.sub}</div>` : ''}</div>`
   ).join('');
 }
 

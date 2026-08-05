@@ -28,7 +28,7 @@
 import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
-import { renderLineChart } from '../charts.js';
+import { renderLineChart, renderBarChart } from '../charts.js';
 import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, ratio, safeDiv, dstr, todayRome, esc } from '../format.js';
 
 let DATA = null;          // { incassi, contratti, centri, costi }
@@ -1047,49 +1047,42 @@ function mkNumeri(m) {
 }
 
 const MKT_HTML = `
-  <div class="kpi-row" id="mkKpi"></div>
-
-  <div class="card">
-    <div class="funnel-head">
-      <h2>Funnel acquisizione — <span id="mkMese"></span></h2>
-      <span class="funnel-spend" id="mkSpend"></span>
+  <div class="sm-head">
+    <div>
+      <h2 class="sm-title">Campagne — <span id="mkMese"></span></h2>
+      <div class="sm-sub" id="mkNota"></div>
     </div>
-    <div class="subtitle" id="mkNota"></div>
     <div class="lead-tabs" id="mkFonte">
       <button data-v="foglio">Foglio KPI ALL 3</button>
       <button data-v="live">Live (opportunità GHL)</button>
     </div>
+  </div>
+
+  <div class="kpi-row" id="mkKpi"></div>
+
+  <div class="card">
+    <h2>Spesa pubblicitaria per mese</h2>
+    <div class="subtitle">Sempre dal foglio KPI ALL 3: la spesa di Salone Vincente non esiste in nessun'altra
+      fonte. Passa sopra una barra per lead, CPL e chiusure di quel mese.</div>
+    <div class="chart-wrap"><svg id="mkSpesa" width="100%" height="260"></svg></div>
+  </div>
+
+  <div class="card">
+    <h2>Dal lead al cliente</h2>
+    <div class="subtitle" id="mkFunNota"></div>
     <div class="funnel" id="mkFunnel"></div>
     <div class="funnel-kpis" id="mkFunnelKpi"></div>
   </div>
 
   <div class="card">
-    <h2>Venduto del mese secondo Notion — tutte le fonti</h2>
-    <div class="subtitle">Il funnel qui sopra conta solo quello che passa dalle opportunità GHL (le campagne).
-      Qui c'è invece tutto il venduto del mese come lo vede Notion — referral e passaparola compresi:
-      serve a capire quanta parte del fatturato la generano davvero le campagne. Le due cifre non si sommano.</div>
-    <div class="kpi-row" id="mkNotion"></div>
-  </div>
-
-  <div class="card">
-    <h2>Andamento 12 mesi</h2>
-    <div class="subtitle">Spesa pubblicitaria e valore dei contratti chiusi dal funnel, mese per mese.</div>
-    <div class="legend">
-      <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Spesa ADV</span>
-      <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Valore contratti chiusi</span>
-    </div>
-    <div class="chart-wrap"><svg id="mkTrend" width="100%" height="280"></svg></div>
-  </div>
-
-  <div class="card">
     <h2>Mese per mese</h2>
-    <div class="subtitle">Il tracker completo: colonna "Fonte" = da dove arrivano i numeri di quella riga
-      (il budget è sempre del foglio).</div>
+    <div class="subtitle">Il tracker completo. La colonna "Fonte" dice da dove arrivano i numeri di quella riga;
+      la spesa è sempre del foglio.</div>
     <div class="table-scroll"><table id="mkTabella"></table></div>
   </div>
 
   <div class="card">
-    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+    <div class="mk-head">
       <h2 style="margin-right:auto">Vendita — <span id="mkMeseV"></span></h2>
       <button class="tk-btn tk-btn-pri" id="mkModifica">Modifica i numeri a mano</button>
     </div>
@@ -1103,34 +1096,46 @@ function renderMarketing() {
   const content = _mount.querySelector('#fnContent');
   content.innerHTML = MKT_HTML;
   const k = mkNumeri(MESE);
-  const lv = rigaFunnel(MESE);
 
   _mount.querySelector('#mkMese').textContent = ymLabel(MESE);
   _mount.querySelector('#mkMeseV').textContent = ymLabel(MESE);
-  _mount.querySelector('#mkSpend').innerHTML =
-    `Spesa ADV <b>${eur(k.budget)}</b> · CPL <b>${k.cpl === null ? '—' : eur2(k.cpl)}</b> · CAC <b>${eur(k.cac)}</b>`;
   _mount.querySelector('#mkNota').innerHTML = k.fonte === 'live'
-    ? `Numeri dal vivo dalle opportunità GHL (aggiornati al momento), contate per mese di creazione — la stessa
-       regola del foglio. La spesa pubblicitaria arriva comunque dal foglio KPI ALL 3.`
-    : `Dato ufficiale del foglio "KPI MARKETING & VENDITE 2026" (KPI ALL 3)${
+    ? `Numeri dal vivo dalle opportunità GHL, contate per mese di creazione — la stessa regola del foglio.
+       La spesa arriva comunque dal foglio KPI ALL 3.`
+    : `Dato ufficiale del foglio "KPI MARKETING &amp; VENDITE 2026"${
         rigaFoglio(MESE) ? '' : ' — <strong>nessuna riga per questo mese</strong>'}.
-       In automatico i mesi chiusi si leggono dal foglio e il mese in corso dal vivo.`;
+       In automatico i mesi chiusi si leggono dal foglio, il mese in corso dal vivo.`;
 
   _mount.querySelectorAll('#mkFonte button').forEach(b => {
     b.classList.toggle('active', b.dataset.v === k.fonte);
     b.onclick = () => { MKT_VISTA = b.dataset.v; renderMarketing(); };
   });
 
+  // i quattro numeri della pagina: quanto spendiamo, cosa ne esce, quanto costa
   renderKpiRow(_mount.querySelector('#mkKpi'), [
-    { label: 'Spesa ADV', value: eur(k.budget), sub: 'dal foglio KPI ALL 3' },
-    { label: 'CPL', value: k.cpl === null ? '—' : eur2(k.cpl), sub: fmt(k.lead) + ' lead' },
-    { label: 'CAC', value: eur(k.cac), sub: fmt(k.chiusure) + ' chiusure' },
-    { label: 'ROAS contrattualizzato', value: ratio(k.roas), sub: eur(k.valore) + ' di contratti' },
-    { label: 'ROAS incassato', value: ratio(k.roasCash), sub: k.cash === null ? 'cash non disponibile' : eur(k.cash) + ' incassati subito' },
-    { label: 'Ticket medio', value: eur(k.ticket), sub: 'valore ÷ chiusure' },
+    { label: 'Spesa pubblicitaria', value: eur(k.budget),
+      info: 'Budget ADV del mese dal foglio KPI ALL 3. È l\'unica fonte: la spesa dell\'account Meta di '
+        + 'Salone Vincente non finisce in Supabase (lì ci sono solo gli account dei centri).' },
+    { label: 'Lead generati', value: fmt(k.lead),
+      info: k.fonte === 'live'
+        ? 'Opportunità GHL nate nel mese, contate dal vivo.'
+        : 'Lead dichiarati sul foglio per questo mese.' },
+    { label: 'Costo per lead', value: k.cpl === null ? '—' : eur2(k.cpl),
+      info: 'Spesa ÷ lead del mese. Se manca uno dei due resta "—", non zero.' },
+    { label: 'Appuntamenti fissati', value: fmt(k.app),
+      info: fmt(k.daSvolgere) + ' ancora da svolgere · ' + pctFrac(k.booking) + ' dei lead diventa appuntamento' },
+    { label: 'Chiusure', value: fmt(k.chiusure),
+      info: 'Costano ' + eur(k.cac) + ' l\'una (spesa ÷ chiusure) e valgono ' + eur(k.valore) + ' di contratti.' },
+    { label: 'ROAS incassato', value: ratio(k.roasCash),
+      info: k.cash === null
+        ? 'Il cash immediato di questo mese non è sul foglio.'
+        : eur(k.cash) + ' incassati subito su ' + eur(k.budget) + ' di spesa. Il ROAS sul contrattualizzato è '
+          + ratio(k.roas) + '.' },
   ]);
 
-  // funnel: le stesse barre della sezione Marketing per centro
+  _mount.querySelector('#mkFunNota').innerHTML = `Come si assottiglia il mese di <strong>${ymLabel(MESE)}</strong>,
+    passaggio per passaggio. Conta solo ciò che passa dalle campagne: referral e passaparola non sono qui.`;
+
   const stages = [
     { nome: 'Lead', val: k.lead },
     { nome: 'Appuntamenti fissati', val: k.app },
@@ -1157,64 +1162,52 @@ function renderMarketing() {
     kpiBox('Da appuntamento a presentato', pctFrac(k.showUp), 'show-up rate') +
     kpiBox('Chiusure sui presentati', pctFrac(k.closing), 'closing rate') +
     kpiBox('Chiusure sui lead', pctFrac(k.closingLead), 'quanti lead diventano clienti') +
-    kpiBox('ROI sul cash', k.roi === null ? '—' : pctFrac(k.roi), 'incassato subito − spesa, sulla spesa') +
-    kpiBox('% cash sui contratti', pctFrac(k.pctCash), 'quanto del venduto entra subito');
+    kpiBox('Costo per cliente', eur(k.cac), 'spesa ÷ chiusure') +
+    kpiBox('Ticket medio', eur(k.ticket), 'valore ÷ chiusure');
 
-  // confronto con Notion: il venduto di tutte le fonti nello stesso mese
-  const cont = contrattualizzato(MESE);
-  const inc = splitIncassato(MESE);
-  renderKpiRow(_mount.querySelector('#mkNotion'), [
-    { label: 'Nuovi contratti', value: fmt(cont.nuovi), sub: eur(cont.nuoviVal) + ' contrattualizzati' },
-    { label: 'Cash 1ª rata nuovi', value: eur(inc.nuovi), sub: 'incassato nel mese dai clienti nuovi' },
-    { label: 'Rinnovi', value: fmt(cont.rinnovi), sub: eur(cont.rinnoviVal) + ' · incassati ' + eur(inc.rinnovi) },
-    { label: 'Upsell', value: fmt(cont.upsell), sub: eur(cont.upsellVal) + ' · incassati ' + eur(inc.upsell) },
-    { label: 'Chiusure dal funnel', value: fmt(k.chiusure),
-      sub: cont.nuovi > 0 ? pctFrac(div(k.chiusure, cont.nuovi)) + ' dei contratti nuovi' : '—' },
-  ]);
-
-  renderMktTrend();
+  renderMktSpesa();
   renderMktTabella();
   renderVenditaKpi();
   _mount.querySelector('#mkModifica').onclick = () => apriFormVendita(MESE);
 }
 
-function renderMktTrend() {
-  const el = _mount.querySelector('#mkTrend');
+// spesa mese per mese a barre (il tracker parte da gennaio 2026: prima non ci
+// sono numeri, e una fila di zeri iniziali direbbe "non si spendeva", che è falso)
+function renderMktSpesa() {
+  const el = _mount.querySelector('#mkSpesa');
   if (!el) return;
-  // il tracker parte da gennaio 2026: prima non ci sono numeri, e una serie di
-  // zeri iniziali schiaccerebbe la scala facendo sembrare che non si spendesse nulla
   const primo = mesiMarketing()[0];
-  const months = [];
-  for (let i = 11; i >= 0; i--) { const m = addYm(MESE, -i); if (!primo || m >= primo) months.push(m); }
-  const rows = months.map(m => { const k = mkNumeri(m); return { ...k, spesa: k.budget || 0, valoreC: k.valore || 0 }; });
-  renderLineChart(el, months, rows, [
-    { key: 'spesa', color: '--series-1', name: 'Spesa ADV' },
-    { key: 'valoreC', color: '--series-2', name: 'Valore contratti chiusi' },
-  ], {
-    xlab: ymShort, yfmt: eur, height: 280,
-    tip: (r, m) => `<div class="t-date">${ymLabel(m)}</div>
-      <div class="t-row"><span>Spesa ADV</span><b>${eur(r.budget)}</b></div>
-      <div class="t-row"><span>Valore contratti</span><b>${eur(r.valore)}</b></div>
-      <div class="t-row"><span>Lead</span><b>${fmt(r.lead)}</b></div>
-      <div class="t-row"><span>CPL</span><b>${r.cpl === null ? '—' : eur2(r.cpl)}</b></div>
-      <div class="t-row"><span>Chiusure</span><b>${fmt(r.chiusure)}</b></div>
-      <div class="t-row"><span>CAC</span><b>${eur(r.cac)}</b></div>`,
+  const buckets = [];
+  for (let i = 11; i >= 0; i--) {
+    const m = addYm(MESE, -i);
+    if (primo && m < primo) continue;
+    const k = mkNumeri(m);
+    buckets.push({ label: ymShort(m), value: k.budget || 0, k });
+  }
+  renderBarChart(el, buckets, {
+    height: 260,
+    tip: b => `<div class="t-date">${ymLabel(b.k.mese)}</div>
+      <div class="t-row"><span>Spesa ADV</span><b>${eur(b.k.budget)}</b></div>
+      <div class="t-row"><span>Lead</span><b>${fmt(b.k.lead)}</b></div>
+      <div class="t-row"><span>CPL</span><b>${b.k.cpl === null ? '—' : eur2(b.k.cpl)}</b></div>
+      <div class="t-row"><span>Chiusure</span><b>${fmt(b.k.chiusure)}</b></div>
+      <div class="t-row"><span>Costo per cliente</span><b>${eur(b.k.cac)}</b></div>
+      <div class="t-row"><span>Valore contratti</span><b>${eur(b.k.valore)}</b></div>`,
   });
 }
 
 const mktCols = [
   { key: 'mese', label: 'Mese', fmt: v => ymLabel(v) },
-  { key: 'budget', label: 'Spesa ADV', fmt: eur },
+  { key: 'budget', label: 'Spesa', fmt: eur },
   { key: 'lead', label: 'Lead', fmt },
   { key: 'cpl', label: 'CPL', fmt: v => v === null ? '—' : eur2(v) },
   { key: 'app', label: 'App. fissati', fmt },
   { key: 'show', label: 'Presentati', fmt },
   { key: 'chiusure', label: 'Chiusure', fmt },
-  { key: 'cac', label: 'CAC', fmt: eur },
+  { key: 'cac', label: 'Costo per cliente', fmt: eur },
   { key: 'valore', label: 'Valore contratti', fmt: eur },
-  { key: 'roas', label: 'ROAS', fmt: ratio },
   { key: 'cash', label: 'Cash immediato', fmt: eur },
-  { key: 'pctCash', label: '% cash', fmt: pctFrac },
+  { key: 'roas', label: 'ROAS', fmt: ratio },
   { key: 'fonte', label: 'Fonte', fmt: v => v === 'live' ? 'GHL dal vivo' : 'foglio' },
 ];
 
@@ -1224,7 +1217,8 @@ function renderMktTabella() {
   const rows = mesiMarketing().map(mkNumeri);
   if (!rows.length) { el.innerHTML = '<div class="status">Nessun dato marketing: il sync dal foglio non è ancora passato.</div>'; return; }
   renderTable(el, mktCols, rows, mktSort,
-    k => { mktSort = { key: k, dir: mktSort.key === k ? -mktSort.dir : -1 }; renderMktTabella(); });
+    k => { mktSort = { key: k, dir: mktSort.key === k ? -mktSort.dir : -1 }; renderMktTabella(); },
+    { barKey: 'budget' });
 }
 
 // ── blocco Vendita (dentro il tab Marketing) ─────────────────────────────────
@@ -1284,7 +1278,7 @@ function renderVenditaKpi() {
       { label: '% chiusura su call', value: pctFrac(safeDiv(upN === null ? cont.upsell : upN, numOrNull(v.up_call))) },
     ] },
   ];
-  renderKpiGroups(el, gruppi);
+  renderKpiGroups(el, gruppi, { righe: true });
 }
 
 // ── form: i numeri vendita che nessun sistema registra ───────────────────────
@@ -2022,5 +2016,5 @@ export async function render(mount, params) {
 export function onResize() {
   if (!DATA || !_mount) return;
   if (_mount.querySelector('#fnTrend')) renderTrend();
-  if (_mount.querySelector('#mkTrend')) renderMktTrend();
+  if (_mount.querySelector('#mkSpesa')) renderMktSpesa();
 }

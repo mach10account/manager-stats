@@ -251,11 +251,21 @@ header::before { /* alone di luce in alto a sinistra */
 
 /* ── KPI ───────────────────────────────────────────────────────────────── */
 /* riga piatta (sezione Chiamate) */
-.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+/* position: relative = àncora dei fumetti ⓘ delle tile (vedi .kg-i::after) */
+.kpi-row { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+
+/* testata di pagina dentro una sezione (titolo + nota a sinistra, chip a destra) */
+.sm-head { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.sm-head .lead-tabs { margin: 0 0 0 auto; }
+.sm-title { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: 0.01em; }
+.sm-sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; max-width: 78ch; }
 .tile {
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px;
   padding: 14px 16px; box-shadow: var(--shadow-card);
+  /* i numeri restano allineati fra loro anche quando un'etichetta va a capo */
+  display: flex; flex-direction: column;
 }
+.tile .value { margin-top: auto; }
 .tile .label, .kg-tile .label {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
   color: var(--muted); margin-bottom: 6px;
