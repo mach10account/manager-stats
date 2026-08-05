@@ -28,8 +28,8 @@
 import { supabase } from '../supabase.js';
 import { fetchAll } from '../data.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
-import { renderLineChart, renderBarChart } from '../charts.js';
-import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, ratio, safeDiv, dstr, todayRome, esc } from '../format.js';
+import { renderLineChart } from '../charts.js';
+import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, safeDiv, dstr, todayRome, esc } from '../format.js';
 
 let DATA = null;          // { incassi, contratti, centri, costi }
 let _mount = null;
@@ -65,16 +65,13 @@ const TABS = [
   ['dash', 'Dashboard'], ['costi', 'Costi'], ['pnl', 'P&L'], ['marketing', 'Marketing'],
   ['delivery', 'Delivery'], ['clienti', 'Clienti & LTV'], ['report', 'Report'],
 ];
-// tab Marketing: quale fonte mostrare. null = automatico (mesi chiusi dal foglio
-// ufficiale, mese in corso dal vivo); 'foglio'/'live' = scelta esplicita dai chip.
-let MKT_VISTA = null;
 let ruoloSort = { PM: { key: 'gestiti', dir: -1 }, BEAUTY: { key: 'gestiti', dir: -1 }, MEDIA_BUYER: { key: 'gestiti', dir: -1 } };
 let ltvSort = { key: 'incassato', dir: -1 };
 const costiSort = {};                        // per reparto
 
 // ── caricamento ──────────────────────────────────────────────────────────────
 async function buildData() {
-  const [incassi, contratti, centri, costi, capacita, marketing, vendita, funnel, pnlFoglio] = await Promise.all([
+  const [incassi, contratti, centri, costi, capacita, mktSpesa, mktContatti, pnlFoglio] = await Promise.all([
     fetchAll((lo, hi) => supabase.from('fin_incassi')
       .select('id_incasso,id_contratto,centro,consulente,agenzia,tipo_contratto,venditore,data_incasso,data_scadenza,importo,rata_numero,pagato,metodo,comm_venditore,comm_setter,comm_pm,comm_mb,comm_bs')
       .range(lo, hi)),
@@ -88,11 +85,9 @@ async function buildData() {
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('fin_capacita').select('*').range(lo, hi)),
-    // tracker ufficiale del foglio KPI ALL 3 (lo scrive n8n) e KPI vendita a mano
-    supabase.from('fin_marketing').select('*').then(r => r.data || []).catch(() => []),
-    supabase.from('fin_vendita').select('*').then(r => r.data || []).catch(() => []),
-    // funnel mensile dal vivo (opportunita' GHL + chiamate setter)
-    supabase.rpc('api_fin_marketing_mesi').then(r => r.data || []).catch(() => []),
+    // tab Marketing: spesa per settimana e contatti, scritti a mano da qui
+    supabase.from('fin_mkt_spesa').select('*').then(r => r.data || []).catch(() => []),
+    fetchAll((lo, hi) => supabase.from('fin_mkt_contatti').select('*').range(lo, hi)),
     // conto economico DICHIARATO dei mesi chiusi (foglio "PL Database Input")
     fetchAll((lo, hi) => supabase.from('fin_pnl').select('*').range(lo, hi)),
   ]);
@@ -112,16 +107,11 @@ async function buildData() {
   const incassiNorm = incassi.map(r => (r.data_scadenza || !r.data_incasso)
     ? r
     : { ...r, data_scadenza: r.data_incasso, scadenza_da_incasso: true });
-  return { incassi: incassiNorm, contratti: contrattiNorm, centri, costi, capacita, marketing, vendita, funnel, pnlFoglio };
+  return { incassi: incassiNorm, contratti: contrattiNorm, centri, costi, capacita, mktSpesa, mktContatti, pnlFoglio };
 }
 
 async function ricaricaCosti() {
   DATA.costi = await fetchAll((lo, hi) => supabase.from('fin_costi').select('*').range(lo, hi));
-}
-
-async function ricaricaVendita() {
-  const { data } = await supabase.from('fin_vendita').select('*');
-  DATA.vendita = data || [];
 }
 
 // ── filtri e definizioni ─────────────────────────────────────────────────────
@@ -992,353 +982,182 @@ function renderPnl() {
 }
 
 // ── tab Marketing ────────────────────────────────────────────────────────────
-// Replica la pagina Marketing del Cockpit, con le fonti dichiarate riga per riga:
-//  · budget ADV → SEMPRE dal foglio "KPI MARKETING & VENDITE 2026" (KPI ALL 3),
-//    che finisce in fin_marketing col sync n8n: la spesa pubblicitaria di SV non
-//    esiste da nessun'altra parte in Supabase;
-//  · funnel → mesi chiusi dal foglio (dato ufficiale), mese in corso dal vivo
-//    dalle opportunita' GHL. La regola di conteggio e' la stessa del foglio:
-//    l'opportunita' pesa nel mese in cui e' NATA, non in quello in cui e' avanzata;
-//  · euro → valore delle chiusure di quel funnel. Il venduto di TUTTE le fonti
-//    (Notion) sta nella card di confronto: e' un'altra popolazione, non si somma.
-// I chip sopra il funnel permettono di forzare foglio o live su qualsiasi mese.
-const meseCorrente = () => dstr(todayRome()).slice(0, 7);
-const numOrNull = v => (v === null || v === undefined || v === '') ? null : +v;
-// come safeDiv, ma un numeratore MANCANTE resta '—': il foglio ha buchi (gennaio
-// senza appuntamenti) e in JS null/253 farebbe 0, cioe' "0%", che e' un'altra cosa.
-const div = (a, b) => (a === null || a === undefined) ? null : safeDiv(a, b);
-const rigaFoglio = m => (DATA.marketing || []).find(r => r.mese === m) || null;
-const rigaFunnel = m => (DATA.funnel || []).find(r => r.mese === m) || null;
-const rigaVendita = m => (DATA.vendita || []).find(r => r.mese === m) || null;
-let mktSort = { key: 'mese', dir: -1 };
+// Rifatto sul prototipo "Cassetto Pieno" (pagina Campagne Meta): quattro numeri,
+// la spesa per settimana, la lista dei contatti generati dalle campagne.
+// Qui NON c'è nessuna fonte automatica, si scrive tutto a mano:
+//   · fin_mkt_spesa    → 1 riga = 1 mese, s1..s5 = la spesa di ogni settimana
+//   · fin_mkt_contatti → 1 riga = 1 contatto
+// I quattro KPI non si salvano da nessuna parte: si ricalcolano da quello che
+// c'è scritto qui sotto, così non possono dire una cosa diversa dalla tabella.
+const ESITI = ['Da contattare', 'Contattato', 'Appuntamento fissato', 'Non risponde',
+               'Non interessato', 'Cliente acquisito'];
+const ESITO_CLASSE = {
+  'Da contattare': 'es-new', 'Contattato': 'es-contact', 'Appuntamento fissato': 'es-appt',
+  'Non risponde': 'es-noans', 'Non interessato': 'es-notint', 'Cliente acquisito': 'es-won',
+};
+const SETT = ['s1', 's2', 's3', 's4', 's5'];
 
-function mesiMarketing() {
-  const s = new Set([...(DATA.marketing || []).map(r => r.mese), ...(DATA.funnel || []).map(r => r.mese)]);
-  return [...s].sort();
-}
-
-// i numeri del mese secondo la vista in vigore (+ i KPI che ne discendono)
-function mkNumeri(m) {
-  const fg = rigaFoglio(m), lv = rigaFunnel(m);
-  const live = (MKT_VISTA ? MKT_VISTA === 'live' : m >= meseCorrente()) && !!lv;
-  const k = live
-    ? { lead: lv.lead, app: lv.app_fissati, daSvolgere: lv.app_da_svolgere, show: lv.app_presentati,
-        chiusure: lv.chiusure, valore: numOrNull(lv.valore_chiusure),
-        cash: fg ? numOrNull(fg.cash_incassato) : null }
-    : { lead: fg ? numOrNull(fg.lead) : null, app: fg ? numOrNull(fg.app_fissati) : null,
-        daSvolgere: fg ? numOrNull(fg.app_da_svolgere) : null,
-        show: fg ? numOrNull(fg.app_presentati) : null, chiusure: fg ? numOrNull(fg.chiusure) : null,
-        valore: fg ? numOrNull(fg.valore_contratti) : null, cash: fg ? numOrNull(fg.cash_incassato) : null };
-  k.mese = m;
-  k.fonte = live ? 'live' : 'foglio';
-  k.budget = fg ? numOrNull(fg.budget_adv) : null;   // sempre e comunque dal foglio
-  k.cpl = div(k.budget, k.lead);
-  k.cac = div(k.budget, k.chiusure);
-  k.roas = div(k.valore, k.budget);
-  k.roasCash = div(k.cash, k.budget);
-  k.roi = (k.budget > 0 && k.cash !== null) ? (k.cash - k.budget) / k.budget : null;
-  k.ticket = div(k.valore, k.chiusure);
-  k.booking = div(k.app, k.lead);
-  k.showUp = div(k.show, k.app);
-  k.closing = div(k.chiusure, k.show);
-  k.closingLead = div(k.chiusure, k.lead);
-  k.pctCash = div(k.cash, k.valore);
-  return k;
-}
+const rigaSpesa = m => (DATA.mktSpesa || []).find(r => r.mese === m) || null;
+const contattiDi = m => (DATA.mktContatti || []).filter(r => r.mese === m);
+const spesaTot = r => SETT.reduce((a, k) => a + (+(r || {})[k] || 0), 0);
 
 const MKT_HTML = `
   <div class="sm-head">
     <div>
-      <h2 class="sm-title">Campagne — <span id="mkMese"></span></h2>
-      <div class="sm-sub" id="mkNota"></div>
-    </div>
-    <div class="lead-tabs" id="mkFonte">
-      <button data-v="foglio">Foglio KPI ALL 3</button>
-      <button data-v="live">Live (opportunità GHL)</button>
+      <h2 class="sm-title">Campagne Meta</h2>
+      <div class="sm-sub">Spesa pubblicitaria e contatti generati in <span id="mkMese"></span>.
+        Su questa pagina si scrive tutto a mano: i quattro numeri qui sotto si ricalcolano da soli.</div>
     </div>
   </div>
 
   <div class="kpi-row" id="mkKpi"></div>
 
   <div class="card">
-    <h2>Spesa pubblicitaria per mese</h2>
-    <div class="subtitle">Sempre dal foglio KPI ALL 3: la spesa di Salone Vincente non esiste in nessun'altra
-      fonte. Passa sopra una barra per lead, CPL e chiusure di quel mese.</div>
-    <div class="chart-wrap"><svg id="mkSpesa" width="100%" height="260"></svg></div>
+    <h2>Spesa per settimana</h2>
+    <div class="subtitle">Scrivi quanto è stato speso in ogni settimana del mese: le barre e la spesa
+      totale si aggiornano appena esci dalla casella. La quinta settimana lasciala vuota se non c'è.</div>
+    <div class="sp-bars" id="mkBarre"></div>
   </div>
 
   <div class="card">
-    <h2>Dal lead al cliente</h2>
-    <div class="subtitle" id="mkFunNota"></div>
-    <div class="funnel" id="mkFunnel"></div>
-    <div class="funnel-kpis" id="mkFunnelKpi"></div>
-  </div>
-
-  <div class="card">
-    <h2>Mese per mese</h2>
-    <div class="subtitle">Il tracker completo. La colonna "Fonte" dice da dove arrivano i numeri di quella riga;
-      la spesa è sempre del foglio.</div>
-    <div class="table-scroll"><table id="mkTabella"></table></div>
-  </div>
-
-  <div class="card">
-    <div class="mk-head">
-      <h2 style="margin-right:auto">Vendita — <span id="mkMeseV"></span></h2>
-      <button class="tk-btn tk-btn-pri" id="mkModifica">Modifica i numeri a mano</button>
-    </div>
-    <div class="subtitle">KPI Totale e il venduto di rinnovi e upsell arrivano da soli (opportunità GHL per il
-      lavoro dei setter, Notion per gli euro). Restano a mano solo i numeri che nessun sistema registra:
-      i referral e le call di rinnovo/upsell.</div>
-    <div class="kpi-groups" id="mkVendita"></div>
+    <h2>Contatti generati</h2>
+    <div class="subtitle">Un contatto per riga. L'esito muove i numeri in cima alla pagina:
+      "Appuntamento fissato" conta negli appuntamenti, ogni riga conta come lead.</div>
+    <div class="table-scroll"><table class="mt-table" id="mkContatti"></table></div>
+    <button class="mt-add" id="mkAdd">+ Aggiungi contatto</button>
   </div>`;
 
 function renderMarketing() {
-  const content = _mount.querySelector('#fnContent');
-  content.innerHTML = MKT_HTML;
-  const k = mkNumeri(MESE);
-
+  _mount.querySelector('#fnContent').innerHTML = MKT_HTML;
   _mount.querySelector('#mkMese').textContent = ymLabel(MESE);
-  _mount.querySelector('#mkMeseV').textContent = ymLabel(MESE);
-  _mount.querySelector('#mkNota').innerHTML = k.fonte === 'live'
-    ? `Numeri dal vivo dalle opportunità GHL, contate per mese di creazione — la stessa regola del foglio.
-       La spesa arriva comunque dal foglio KPI ALL 3.`
-    : `Dato ufficiale del foglio "KPI MARKETING &amp; VENDITE 2026"${
-        rigaFoglio(MESE) ? '' : ' — <strong>nessuna riga per questo mese</strong>'}.
-       In automatico i mesi chiusi si leggono dal foglio, il mese in corso dal vivo.`;
-
-  _mount.querySelectorAll('#mkFonte button').forEach(b => {
-    b.classList.toggle('active', b.dataset.v === k.fonte);
-    b.onclick = () => { MKT_VISTA = b.dataset.v; renderMarketing(); };
-  });
-
-  // i quattro numeri della pagina: quanto spendiamo, cosa ne esce, quanto costa
-  renderKpiRow(_mount.querySelector('#mkKpi'), [
-    { label: 'Spesa pubblicitaria', value: eur(k.budget),
-      info: 'Budget ADV del mese dal foglio KPI ALL 3. È l\'unica fonte: la spesa dell\'account Meta di '
-        + 'Salone Vincente non finisce in Supabase (lì ci sono solo gli account dei centri).' },
-    { label: 'Lead generati', value: fmt(k.lead),
-      info: k.fonte === 'live'
-        ? 'Opportunità GHL nate nel mese, contate dal vivo.'
-        : 'Lead dichiarati sul foglio per questo mese.' },
-    { label: 'Costo per lead', value: k.cpl === null ? '—' : eur2(k.cpl),
-      info: 'Spesa ÷ lead del mese. Se manca uno dei due resta "—", non zero.' },
-    { label: 'Appuntamenti fissati', value: fmt(k.app),
-      info: fmt(k.daSvolgere) + ' ancora da svolgere · ' + pctFrac(k.booking) + ' dei lead diventa appuntamento' },
-    { label: 'Chiusure', value: fmt(k.chiusure),
-      info: 'Costano ' + eur(k.cac) + ' l\'una (spesa ÷ chiusure) e valgono ' + eur(k.valore) + ' di contratti.' },
-    { label: 'ROAS incassato', value: ratio(k.roasCash),
-      info: k.cash === null
-        ? 'Il cash immediato di questo mese non è sul foglio.'
-        : eur(k.cash) + ' incassati subito su ' + eur(k.budget) + ' di spesa. Il ROAS sul contrattualizzato è '
-          + ratio(k.roas) + '.' },
-  ]);
-
-  _mount.querySelector('#mkFunNota').innerHTML = `Come si assottiglia il mese di <strong>${ymLabel(MESE)}</strong>,
-    passaggio per passaggio. Conta solo ciò che passa dalle campagne: referral e passaparola non sono qui.`;
-
-  const stages = [
-    { nome: 'Lead', val: k.lead },
-    { nome: 'Appuntamenti fissati', val: k.app },
-    { nome: 'Appuntamenti presentati', val: k.show },
-    { nome: 'Chiusure', val: k.chiusure },
-  ];
-  const base = stages[0].val;
-  _mount.querySelector('#mkFunnel').innerHTML = stages.map((s, i) => {
-    const step = i > 0
-      ? `<div class="f-step">↓ ${pctFrac(div(s.val, stages[i - 1].val))}</div>` : '';
-    const w = base > 0 ? Math.max((s.val || 0) / base * 100, 2.5) : 2.5;
-    return `${step}
-      <div class="f-label"><span class="f-name">${s.nome}</span>
-        <span class="f-val">${fmt(s.val)}</span>
-        <span class="f-share">${pctFrac(div(s.val, base))}</span></div>
-      <div class="f-bar f-bar-${i + 1}" style="width:${w}%"></div>`;
-  }).join('');
-
-  const kpiBox = (label, val, sub) => `
-    <div class="f-kpi"><span class="f-kpi-label">${label}</span>
-      <span class="f-kpi-val">${val}</span>${sub ? `<span class="f-kpi-sub">${sub}</span>` : ''}</div>`;
-  _mount.querySelector('#mkFunnelKpi').innerHTML =
-    kpiBox('Da lead ad appuntamento', pctFrac(k.booking), 'booking rate') +
-    kpiBox('Da appuntamento a presentato', pctFrac(k.showUp), 'show-up rate') +
-    kpiBox('Chiusure sui presentati', pctFrac(k.closing), 'closing rate') +
-    kpiBox('Chiusure sui lead', pctFrac(k.closingLead), 'quanti lead diventano clienti') +
-    kpiBox('Costo per cliente', eur(k.cac), 'spesa ÷ chiusure') +
-    kpiBox('Ticket medio', eur(k.ticket), 'valore ÷ chiusure');
-
+  renderMktKpi();
   renderMktSpesa();
-  renderMktTabella();
-  renderVenditaKpi();
-  _mount.querySelector('#mkModifica').onclick = () => apriFormVendita(MESE);
+  renderMktContatti();
+  _mount.querySelector('#mkAdd').onclick = nuovoContatto;
 }
 
-// spesa mese per mese a barre (il tracker parte da gennaio 2026: prima non ci
-// sono numeri, e una fila di zeri iniziali direbbe "non si spendeva", che è falso)
-function renderMktSpesa() {
-  const el = _mount.querySelector('#mkSpesa');
+function renderMktKpi() {
+  const el = _mount.querySelector('#mkKpi');
   if (!el) return;
-  const primo = mesiMarketing()[0];
-  const buckets = [];
-  for (let i = 11; i >= 0; i--) {
-    const m = addYm(MESE, -i);
-    if (primo && m < primo) continue;
-    const k = mkNumeri(m);
-    buckets.push({ label: ymShort(m), value: k.budget || 0, k });
-  }
-  renderBarChart(el, buckets, {
-    height: 260,
-    tip: b => `<div class="t-date">${ymLabel(b.k.mese)}</div>
-      <div class="t-row"><span>Spesa ADV</span><b>${eur(b.k.budget)}</b></div>
-      <div class="t-row"><span>Lead</span><b>${fmt(b.k.lead)}</b></div>
-      <div class="t-row"><span>CPL</span><b>${b.k.cpl === null ? '—' : eur2(b.k.cpl)}</b></div>
-      <div class="t-row"><span>Chiusure</span><b>${fmt(b.k.chiusure)}</b></div>
-      <div class="t-row"><span>Costo per cliente</span><b>${eur(b.k.cac)}</b></div>
-      <div class="t-row"><span>Valore contratti</span><b>${eur(b.k.valore)}</b></div>`,
+  const righe = contattiDi(MESE);
+  const spesa = spesaTot(rigaSpesa(MESE));
+  const app = righe.filter(r => r.esito === 'Appuntamento fissato').length;
+  const acquisiti = righe.filter(r => r.esito === 'Cliente acquisito').length;
+  renderKpiRow(el, [
+    { label: 'Spesa totale', value: eur(spesa), info: 'Somma delle settimane scritte qui sotto.' },
+    { label: 'Lead generati', value: fmt(righe.length), info: 'Una riga della tabella = un lead.' },
+    { label: 'Costo per lead', value: righe.length ? eur2(spesa / righe.length) : '—',
+      info: 'Spesa totale ÷ contatti in tabella. Resta "—" finché non c\'è nessun contatto.' },
+    { label: 'Appuntamenti fissati', value: fmt(app),
+      info: 'Contatti con esito "Appuntamento fissato"' + (acquisiti > 0
+        ? '. I ' + acquisiti + ' già diventati clienti non sono qui dentro: hanno il loro esito.' : '.') },
+  ]);
+}
+
+// barre + caselle: una colonna per settimana, l'altezza è in proporzione
+// alla settimana più cara del mese
+function renderMktSpesa() {
+  const el = _mount.querySelector('#mkBarre');
+  if (!el) return;
+  const r = rigaSpesa(MESE) || {};
+  const max = Math.max(...SETT.map(k => +r[k] || 0), 1);
+  el.innerHTML = SETT.map((k, i) => {
+    const v = +r[k] || 0;
+    return `<div class="sp-col">
+      <div class="sp-val">${v > 0 ? eur(v) : ''}</div>
+      <div class="sp-track">${v > 0
+        ? `<div class="sp-bar" style="height:${Math.max(v / max * 100, 3)}%"></div>` : ''}</div>
+      <div class="sp-lab">Sett. ${i + 1}</div>
+      <input class="sp-inp" data-k="${k}" inputmode="decimal" placeholder="0"
+        value="${r[k] === null || r[k] === undefined ? '' : r[k]}">
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.sp-inp').forEach(inp => {
+    inp.onchange = () => salvaSpesa(inp.dataset.k, inp.value);
   });
 }
 
-const mktCols = [
-  { key: 'mese', label: 'Mese', fmt: v => ymLabel(v) },
-  { key: 'budget', label: 'Spesa', fmt: eur },
-  { key: 'lead', label: 'Lead', fmt },
-  { key: 'cpl', label: 'CPL', fmt: v => v === null ? '—' : eur2(v) },
-  { key: 'app', label: 'App. fissati', fmt },
-  { key: 'show', label: 'Presentati', fmt },
-  { key: 'chiusure', label: 'Chiusure', fmt },
-  { key: 'cac', label: 'Costo per cliente', fmt: eur },
-  { key: 'valore', label: 'Valore contratti', fmt: eur },
-  { key: 'cash', label: 'Cash immediato', fmt: eur },
-  { key: 'roas', label: 'ROAS', fmt: ratio },
-  { key: 'fonte', label: 'Fonte', fmt: v => v === 'live' ? 'GHL dal vivo' : 'foglio' },
-];
-
-function renderMktTabella() {
-  const el = _mount.querySelector('#mkTabella');
+function renderMktContatti() {
+  const el = _mount.querySelector('#mkContatti');
   if (!el) return;
-  const rows = mesiMarketing().map(mkNumeri);
-  if (!rows.length) { el.innerHTML = '<div class="status">Nessun dato marketing: il sync dal foglio non è ancora passato.</div>'; return; }
-  renderTable(el, mktCols, rows, mktSort,
-    k => { mktSort = { key: k, dir: mktSort.key === k ? -mktSort.dir : -1 }; renderMktTabella(); },
-    { barKey: 'budget' });
+  const righe = contattiDi(MESE)
+    .slice()
+    .sort((a, b) => (a.data || '9999') < (b.data || '9999') ? -1 : 1);
+  el.innerHTML = `
+    <thead><tr>
+      <th>Nome</th><th>Telefono</th><th>Data</th><th>Trattamento richiesto</th>
+      <th>Esito</th><th>Note</th><th></th>
+    </tr></thead>
+    <tbody>
+      ${righe.length ? righe.map(r => `
+        <tr data-id="${r.id}">
+          <td><input class="cell-inp" data-c="nome" value="${esc(r.nome || '')}" placeholder="Nome e cognome"></td>
+          <td><input class="cell-inp" data-c="telefono" value="${esc(r.telefono || '')}" placeholder="Telefono"></td>
+          <td><input class="cell-inp" data-c="data" type="date" value="${esc(r.data || '')}"></td>
+          <td><input class="cell-inp" data-c="trattamento" value="${esc(r.trattamento || '')}" placeholder="Trattamento"></td>
+          <td><select class="cell-sel ${ESITO_CLASSE[r.esito] || 'es-new'}" data-c="esito">
+            ${ESITI.map(e => `<option${e === r.esito ? ' selected' : ''}>${e}</option>`).join('')}
+          </select></td>
+          <td><input class="cell-inp" data-c="note" value="${esc(r.note || '')}" placeholder="Note…"></td>
+          <td><button class="cell-del" title="Elimina il contatto">✕</button></td>
+        </tr>`).join('')
+      : `<tr><td colspan="7" class="mt-vuoto">Nessun contatto per ${ymLabel(MESE)}.
+           Aggiungine uno col pulsante qui sotto.</td></tr>`}
+    </tbody>`;
+
+  el.querySelectorAll('tr[data-id]').forEach(tr => {
+    const id = tr.dataset.id;
+    tr.querySelectorAll('.cell-inp, .cell-sel').forEach(c => {
+      c.onchange = () => salvaContatto(id, c.dataset.c, c.value);
+    });
+    tr.querySelector('.cell-del').onclick = () => eliminaContatto(id);
+  });
 }
 
-// ── blocco Vendita (dentro il tab Marketing) ─────────────────────────────────
-// Totale = lavoro dei setter del mese, per mese di CAMBIO STAGE (la stessa
-// convenzione della sezione Vendita: "cosa e' successo questo mese").
-function renderVenditaKpi() {
-  const el = _mount.querySelector('#mkVendita');
-  if (!el) return;
-  const lv = rigaFunnel(MESE);
-  const v = rigaVendita(MESE) || {};
-  const cont = contrattualizzato(MESE);
-  const inc = splitIncassato(MESE);
-  if (!lv) { el.innerHTML = '<div class="status">Nessun dato per questo mese.</div>'; return; }
-
-  const rinN = numOrNull(v.rin_chiusura);
-  const upN = numOrNull(v.up_chiusure);
-  const gruppi = [
-    { step: '1', title: 'KPI Totale', tiles: [
-      { label: 'Chiusure', value: fmt(lv.st_chiusure), hero: true, sub: eur(lv.st_contrattualizzato) + ' contrattualizzati' },
-      { label: 'Chiamati', value: fmt(lv.chiamati) },
-      { label: 'Risposte', value: fmt(lv.risposte) },
-      { label: 'Da richiamare', value: fmt(lv.st_da_richiamare) },
-      { label: 'Scarti', value: fmt(lv.st_scarti), sub: 'non in target, fake' },
-      { label: 'App. fissati', value: fmt(lv.st_app_fissati) },
-      { label: 'Da svolgere', value: fmt(lv.st_app_da_svolgere) },
-      { label: 'Presentati', value: fmt(lv.st_show) },
-      { label: 'No show', value: fmt(lv.st_noshow) },
-      { label: 'Incassato', value: eur(lv.st_incassato) },
-      { label: '% App. su risposte', value: pctFrac(safeDiv(lv.st_app_fissati, lv.risposte)) },
-      { label: '% Show up', value: pctFrac(safeDiv(lv.st_show, lv.st_app_fissati)) },
-      { label: '% Closing', value: pctFrac(safeDiv(lv.st_chiusure, lv.st_show)) },
-      { label: 'Ticket medio', value: eur(safeDiv(lv.st_contrattualizzato, lv.st_chiusure)) },
-    ] },
-    { step: '2', title: 'KPI Referral', tiles: [
-      { label: 'Vendite referral', value: fmt(numOrNull(v.ref_n)), hero: true, sub: 'a mano' },
-      { label: 'Contrattualizzato', value: eur(numOrNull(v.ref_contr)) },
-      { label: 'Incassato', value: eur(numOrNull(v.ref_incassato)) },
-      { label: 'Ticket medio', value: eur(div(numOrNull(v.ref_contr), numOrNull(v.ref_n))) },
-      { label: '% incassato', value: pctFrac(div(numOrNull(v.ref_incassato), numOrNull(v.ref_contr))) },
-    ] },
-    { step: '3', title: 'KPI Rinnovi', tiles: [
-      { label: 'Rinnovi firmati', value: fmt(cont.rinnovi), hero: true, sub: 'da Notion, nel mese' },
-      { label: 'Contrattualizzato', value: eur(cont.rinnoviVal) },
-      { label: 'Incassato', value: eur(inc.rinnovi) },
-      { label: 'Ticket medio', value: eur(safeDiv(cont.rinnoviVal, cont.rinnovi)) },
-      { label: '% incassato', value: pctFrac(safeDiv(inc.rinnovi, cont.rinnoviVal)) },
-      { label: 'Call di rinnovo', value: fmt(numOrNull(v.rin_call)), sub: 'a mano' },
-      { label: '% chiusura su call', value: pctFrac(safeDiv(rinN === null ? cont.rinnovi : rinN, numOrNull(v.rin_call))) },
-      { label: 'Rinnovi 90/180/360', value: [v.rin_90, v.rin_180, v.rin_360].map(x => x === null || x === undefined ? '—' : x).join(' / '), sub: 'a mano' },
-    ] },
-    { step: '4', title: 'KPI Upsell', tiles: [
-      { label: 'Upsell firmati', value: fmt(cont.upsell), hero: true, sub: 'da Notion, nel mese' },
-      { label: 'Contrattualizzato', value: eur(cont.upsellVal) },
-      { label: 'Incassato', value: eur(inc.upsell) },
-      { label: 'Ticket medio', value: eur(safeDiv(cont.upsellVal, cont.upsell)) },
-      { label: 'Call upsell', value: fmt(numOrNull(v.up_call)), sub: 'a mano' },
-      { label: '% chiusura su call', value: pctFrac(safeDiv(upN === null ? cont.upsell : upN, numOrNull(v.up_call))) },
-    ] },
-  ];
-  renderKpiGroups(el, gruppi, { righe: true });
+// ── scritture (stesso schema di fin_costi/fin_capacita: salva, aggiorna DATA,
+//    ridisegna — niente refetch, la pagina è già quello che c'è nel database)
+async function salvaSpesa(campo, valore) {
+  const v = valore.trim() === '' ? null : Math.max(0, +String(valore).replace(',', '.') || 0);
+  const riga = { ...(rigaSpesa(MESE) || {}), mese: MESE, [campo]: v, agg_at: new Date().toISOString() };
+  const { error } = await supabase.from('fin_mkt_spesa').upsert(riga, { onConflict: 'mese' });
+  if (error) { alert('Non sono riuscito a salvare la spesa: ' + error.message); return; }
+  DATA.mktSpesa = (DATA.mktSpesa || []).filter(r => r.mese !== MESE).concat([riga]);
+  renderMktKpi();
+  renderMktSpesa();
 }
 
-// ── form: i numeri vendita che nessun sistema registra ───────────────────────
-const CAMPI_VENDITA = [
-  ['Referral', [['ref_n', 'n° vendite referral'], ['ref_contr', 'Contrattualizzato €'], ['ref_incassato', 'Incassato €']]],
-  ['Rinnovi', [['rin_call', 'n° call di rinnovo'], ['rin_chiusura', 'n° chiusure rinnovo'],
-               ['rin_90', 'Rinnovi a 90 giorni'], ['rin_180', 'Rinnovi a 180 giorni'], ['rin_360', 'Rinnovi a 360 giorni']]],
-  ['Upsell', [['up_call', 'n° call upsell'], ['up_chiusure', 'n° chiusure upsell']]],
-];
-
-function apriFormVendita(m) {
-  const box = _mount.querySelector('#fnModal');
-  const v = rigaVendita(m) || {};
-  const val = k => (v[k] === null || v[k] === undefined) ? '' : v[k];
-
-  box.innerHTML = `<div class="modal-card tk-form-card">
-    <div class="modal-head"><h3>Numeri vendita — ${ymLabel(m)}</h3>
-      <button class="modal-close" id="fvX" title="Chiudi">✕</button></div>
-    <div class="modal-sub">Solo quello che non arriva da solo: i referral e le call di rinnovo/upsell.
-      Il venduto di rinnovi e upsell lo legge già Notion, il lavoro dei setter le opportunità GHL.</div>
-    ${CAMPI_VENDITA.map(([tit, campi]) => `
-      <h4 style="margin:14px 0 6px;font-size:13px">${tit}</h4>
-      <div class="tk-campi">
-        ${campi.map(([k, l]) =>
-          `<label class="tk-campo">${l}<input type="number" step="any" id="fv_${k}" value="${val(k)}" placeholder="—"></label>`).join('')}
-      </div>`).join('')}
-    <div class="tk-campi" style="margin-top:12px">
-      <label class="tk-campo tk-largo">Note<input type="text" id="fv_note" maxlength="300" value="${esc(v.note || '')}"></label>
-    </div>
-    <div class="tk-azioni tk-azioni-form">
-      <span class="tk-msg" id="fvMsg"></span>
-      <button class="tk-btn tk-btn-ghost" id="fvAnnulla">Annulla</button>
-      <button class="tk-btn tk-btn-pri" id="fvSalva">Salva</button>
-    </div>
-  </div>`;
-  box.classList.remove('hidden');
-
-  const q = id => box.querySelector('#' + id);
-  const chiudi = () => { box.classList.add('hidden'); box.innerHTML = ''; };
-  q('fvX').onclick = chiudi;
-  q('fvAnnulla').onclick = chiudi;
-  box.onclick = e => { if (e.target === box) chiudi(); };
-
-  q('fvSalva').onclick = async () => {
-    const riga = { mese: m, note: q('fv_note').value.trim() || null, aggiornato_a: new Date().toISOString() };
-    for (const [, campi] of CAMPI_VENDITA) {
-      for (const [k] of campi) {
-        const raw = q('fv_' + k).value.trim();
-        riga[k] = raw === '' ? null : +raw;
-      }
-    }
-    q('fvSalva').disabled = true;
-    const { error } = await supabase.from('fin_vendita').upsert(riga, { onConflict: 'mese' });
-    q('fvSalva').disabled = false;
-    if (error) { q('fvMsg').textContent = error.message; return; }
-    chiudi();
-    await ricaricaVendita();
-    renderAll();
-  };
+async function salvaContatto(id, campo, valore) {
+  const v = valore === '' ? null : valore;
+  const { error } = await supabase.from('fin_mkt_contatti')
+    .update({ [campo]: v, agg_at: new Date().toISOString() }).eq('id', id);
+  if (error) { alert('Non sono riuscito a salvare il contatto: ' + error.message); return; }
+  const r = (DATA.mktContatti || []).find(x => x.id === id);
+  if (r) r[campo] = v;
+  renderMktKpi();
+  if (campo === 'esito') renderMktContatti();   // cambia il colore della pillola
 }
+
+async function nuovoContatto() {
+  const { data, error } = await supabase.from('fin_mkt_contatti')
+    .insert({ mese: MESE, esito: 'Da contattare' }).select().single();
+  if (error) { alert('Non sono riuscito ad aggiungere il contatto: ' + error.message); return; }
+  DATA.mktContatti = (DATA.mktContatti || []).concat([data]);
+  renderMktKpi();
+  renderMktContatti();
+  const ultima = _mount.querySelector(`#mkContatti tr[data-id="${data.id}"] .cell-inp`);
+  if (ultima) ultima.focus();
+}
+
+async function eliminaContatto(id) {
+  const r = (DATA.mktContatti || []).find(x => x.id === id);
+  if (!confirm('Elimino il contatto' + (r && r.nome ? ' "' + r.nome + '"' : '') + '?')) return;
+  const { error } = await supabase.from('fin_mkt_contatti').delete().eq('id', id);
+  if (error) { alert('Non sono riuscito a eliminare il contatto: ' + error.message); return; }
+  DATA.mktContatti = (DATA.mktContatti || []).filter(x => x.id !== id);
+  renderMktKpi();
+  renderMktContatti();
+}
+
 
 // ── tab Delivery ─────────────────────────────────────────────────────────────
 // La capienza NON è più un 35 fisso: si imposta persona per persona nelle tabelle
@@ -2015,6 +1834,6 @@ export async function render(mount, params) {
 
 export function onResize() {
   if (!DATA || !_mount) return;
+  // le barre del Marketing sono CSS: si ridimensionano da sole
   if (_mount.querySelector('#fnTrend')) renderTrend();
-  if (_mount.querySelector('#mkSpesa')) renderMktSpesa();
 }

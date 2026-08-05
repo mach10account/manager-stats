@@ -363,6 +363,66 @@ header::before { /* alone di luce in alto a sinistra */
 
 @media (max-width: 1020px) { .kpi-groups { grid-template-columns: 1fr; } }
 
+/* ── tab Marketing: spesa a mano + contatti ────────────────────────────── */
+.sp-bars { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; align-items: end; }
+.sp-col { display: flex; flex-direction: column; align-items: stretch; }
+.sp-val {
+  font-size: 12.5px; font-weight: 600; color: var(--text-primary); text-align: center;
+  font-variant-numeric: tabular-nums; min-height: 18px;
+}
+.sp-track { height: 140px; display: flex; align-items: flex-end; justify-content: center; }
+.sp-bar { width: min(100%, 118px); border-radius: 7px 7px 0 0; background: var(--brand-grad); }
+.sp-lab {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); text-align: center; margin: 9px 0 6px;
+}
+.sp-inp, .cell-inp, .cell-sel {
+  font-family: inherit; font-size: 13px; color: var(--text-primary);
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; width: 100%;
+}
+.sp-inp { text-align: center; font-variant-numeric: tabular-nums; }
+.sp-inp:focus, .cell-inp:focus, .cell-sel:focus { outline: none; border-color: var(--sv-azure); box-shadow: 0 0 0 3px var(--ring); }
+
+.mt-table { width: 100%; border-collapse: collapse; min-width: 900px; }
+.mt-table th {
+  text-align: left; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); padding: 0 6px 8px; white-space: nowrap;
+}
+.mt-table td { padding: 4px 6px; border-top: 1px solid var(--grid); }
+.mt-table tr:first-child td { border-top: none; }
+.mt-vuoto { color: var(--muted); font-size: 13px; padding: 18px 6px; text-align: center; }
+.cell-inp { border-color: transparent; background: transparent; }
+.cell-inp:hover { border-color: var(--border); background: var(--surface-1); }
+.cell-sel {
+  border-color: transparent; border-radius: 20px; text-align: center;
+  font-size: 11.5px; font-weight: 700; cursor: pointer; padding: 7px 8px;
+  -webkit-appearance: none; appearance: none;
+}
+.cell-del {
+  border: none; background: none; cursor: pointer; color: var(--muted);
+  font-size: 14px; line-height: 1; padding: 6px 8px; border-radius: 7px;
+}
+.cell-del:hover { color: var(--bad-text); background: var(--row-hover); }
+.mt-add {
+  margin-top: 12px; width: 100%; cursor: pointer;
+  background: none; border: 1px dashed var(--border); border-radius: 10px;
+  color: var(--sv-azure); font-family: inherit; font-size: 13px; font-weight: 700; padding: 11px 16px;
+}
+.mt-add:hover { background: var(--row-hover); border-style: solid; }
+
+/* pillole esito: stessi ruoli-colore del prototipo, coi colori dell'app */
+.es-new     { background: var(--row-alt);  color: var(--text-secondary); }
+.es-contact { background: rgba(34, 112, 216, 0.12); color: var(--series-1); }
+.es-appt    { background: rgba(15, 159, 133, 0.14); color: var(--series-2); }
+.es-noans   { background: rgba(232, 160, 29, 0.16); color: #9a6a04; }
+.es-notint  { background: var(--row-alt);  color: var(--muted); }
+.es-won     { background: rgba(12, 122, 82, 0.14); color: var(--good-text); }
+@media (prefers-color-scheme: dark) {
+  .es-noans { color: var(--warn); }
+}
+@media (max-width: 720px) { .sp-bars { grid-template-columns: repeat(3, 1fr); row-gap: 22px; } }
+
 /* ── CARD ──────────────────────────────────────────────────────────────── */
 .card {
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
