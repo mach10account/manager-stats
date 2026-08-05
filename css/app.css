@@ -424,6 +424,10 @@ header::before { /* alone di luce in alto a sinistra */
 .tm-uscito td { opacity: 0.55; }
 .tm-toggle { font-size: 12.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
 .ac-nome-ro { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+.tm-invito { width: 460px; max-width: 100%; }
+.tm-invito .tk-campi { grid-template-columns: 1fr; }
+.tm-invito-esito { margin-top: 12px; font-size: 13px; display: grid; gap: 8px; }
+.tm-invito-link { border-color: var(--border); background: var(--row-alt); font-size: 12px; }
 
 /* etichetta d'avviso in riga (es. persona non ancora in anagrafica) */
 .badge-nota {

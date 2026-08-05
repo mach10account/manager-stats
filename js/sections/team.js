@@ -160,9 +160,10 @@ function disegnaPersone() {
         <td class="tm-num">${esc(centri || '—')}</td>
         <td>${p.login_email
           ? `<span class="tm-login">${esc(p.login_email)}</span>`
-          : `<select class="cell-sel tm-login-sel"><option value="">— nessuno —</option>${
+          : `<div class="tm-col"><select class="cell-sel tm-login-sel"><option value="">— nessuno —</option>${
               UTENTI.filter(u => !PERSONE.some(x => x.user_id === u.user_id))
-                .map(u => `<option value="${u.user_id}">${esc(u.email)}</option>`).join('')}</select>`}</td>
+                .map(u => `<option value="${u.user_id}">${esc(u.email)}</option>`).join('')}</select>
+              <button class="tk-btn tm-invita">Invita</button></div>`}</td>
         <td><input type="checkbox" class="tm-attivo"${p.attivo ? ' checked' : ''}></td>
         <td class="tm-azioni">${(p.alias || []).length === 0 && !p.user_id
           ? '<button class="tk-btn tm-elimina">Elimina</button>' : ''}</td>
@@ -186,6 +187,8 @@ function disegnaPersone() {
     if (add) add.onchange = () => { if (add.value.trim()) assegna(add.value, id, null); };
     const ls = tr.querySelector('.tm-login-sel');
     if (ls) ls.onchange = () => { if (ls.value) collegaLogin(id, ls.value); };
+    const inv = tr.querySelector('.tm-invita');
+    if (inv) inv.onclick = () => apriInvito(PERSONE.find(x => x.id === id));
     const del = tr.querySelector('.tm-elimina');
     if (del) del.onclick = () => elimina(id);
   });
@@ -228,6 +231,88 @@ async function creaDaOrfano(o) {
   const { data, error } = await supabase.rpc('ms_persona_salva', { p_nome: nome.trim() });
   if (error) { alert('Non sono riuscito a creare la persona: ' + error.message); return; }
   await assegna(o.valore, data, o.tipo);
+}
+
+// ── invito ad accedere ───────────────────────────────────────────────────────
+// La Edge Function `ms-invita` crea l'utente con la service key (che non può
+// stare qui: il sito è pubblico) e restituisce il link di accesso. Il link torna
+// SEMPRE, anche quando il canale scelto consegna: è la via di fuga se non arriva.
+function apriInvito(p) {
+  if (!p) return;
+  const mailSuggerita = (p.alias || []).filter(a => a.tipo === 'email').map(a => a.valore)[0] || '';
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay';
+  ov.innerHTML = `
+    <div class="modal-card tm-invito">
+      <div class="modal-head"><h3>Invita ${esc(p.nome)}</h3>
+        <button class="modal-close" title="Chiudi">✕</button></div>
+      <div class="modal-sub">Gli creo l'accesso a Manager Stats e gli mando il link per entrare
+        e scegliersi la password. Le sezioni che vedrà si assegnano dopo, nella tab Login e permessi.</div>
+      <div class="tk-campi">
+        <label class="tk-campo tk-largo">Email<input type="email" id="tmInvEmail" value="${esc(mailSuggerita)}" placeholder="nome@dominio.it"></label>
+        <label class="tk-campo tk-largo">Come glielo mando
+          <select id="tmInvCanale">
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">Email</option>
+            <option value="link">Solo il link, lo mando io</option>
+          </select></label>
+        <label class="tk-campo tk-largo" id="tmInvTelWrap">Telefono<input type="tel" id="tmInvTel" placeholder="333 1234567"></label>
+      </div>
+      <div class="tm-invito-esito" id="tmInvEsito"></div>
+      <div class="tk-azioni tk-azioni-form">
+        <button class="tk-btn" id="tmInvAnnulla">Annulla</button>
+        <button class="tk-btn tk-btn-pri" id="tmInvOk">Crea l'accesso</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  const chiudi = () => ov.remove();
+  ov.querySelector('.modal-close').onclick = chiudi;
+  ov.querySelector('#tmInvAnnulla').onclick = chiudi;
+  ov.onclick = e => { if (e.target === ov) chiudi(); };
+  const canale = ov.querySelector('#tmInvCanale');
+  const telWrap = ov.querySelector('#tmInvTelWrap');
+  const aggiornaTel = () => { telWrap.style.display = canale.value === 'whatsapp' ? '' : 'none'; };
+  canale.onchange = aggiornaTel;
+  aggiornaTel();
+
+  ov.querySelector('#tmInvOk').onclick = async () => {
+    const btn = ov.querySelector('#tmInvOk');
+    const esito = ov.querySelector('#tmInvEsito');
+    btn.disabled = true;
+    esito.textContent = 'Sto creando l\'accesso…';
+    const { data, error } = await supabase.functions.invoke('ms-invita', {
+      body: {
+        email: ov.querySelector('#tmInvEmail').value.trim(),
+        nome: p.nome,
+        persona_id: p.id,
+        canale: canale.value,
+        telefono: ov.querySelector('#tmInvTel').value.trim(),
+        sezioni: [],
+      },
+    });
+    btn.disabled = false;
+    if (error || (data && data.error)) {
+      esito.className = 'tm-invito-esito val-bad';
+      esito.textContent = (data && data.error) || error.message;
+      return;
+    }
+    esito.className = 'tm-invito-esito';
+    esito.innerHTML = `
+      <div class="${data.avviso ? 'val-bad' : 'val-good'}">${
+        data.avviso ? esc(data.avviso)
+          : (data.inviato === 'whatsapp' ? 'Link mandato su WhatsApp.'
+            : data.inviato === 'email' ? 'Email di invito partita.'
+            : 'Accesso creato: copia il link e mandaglielo.')}</div>
+      <input class="cell-inp tm-invito-link" readonly value="${esc(data.url || '')}">
+      <button class="tk-btn" id="tmInvCopia">Copia il link</button>`;
+    const copia = ov.querySelector('#tmInvCopia');
+    if (copia) copia.onclick = () => {
+      const inp = ov.querySelector('.tm-invito-link');
+      inp.select();
+      navigator.clipboard.writeText(inp.value).then(() => { copia.textContent = 'Copiato'; }, () => {});
+    };
+    await ricarica();
+  };
 }
 
 // ── caricamento ──────────────────────────────────────────────────────────────

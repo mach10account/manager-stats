@@ -67,7 +67,7 @@ function pannelloPicker(u, i) {
       <span>${esc(c.nome || '(senza nome)')}</span>
       <span class="ac-centro-cons">${esc(c.consulente ? nomeDi(c.consulente) : '')}</span>
     </label>`).join('');
-  return `<tr class="ac-picker-row"><td colspan="${SEZIONI.length + 5}">
+  return `<tr class="ac-picker-row"><td colspan="${SEZIONI.length + 6}">
     <div class="ac-picker">
       <input type="search" class="ac-cerca" data-i="${i}" placeholder="Cerca centro…">
       <div class="ac-lista">${righe}</div>
@@ -79,7 +79,7 @@ function disegna() {
   tb.innerHTML =
     '<thead><tr><th>Utente</th><th>Nome</th>' +
     SEZIONI.map(s => `<th>${s.label}</th>`).join('') +
-    '<th>Admin</th><th>Vede</th><th>Ultimo accesso</th><th></th></tr></thead><tbody>' +
+    '<th>Admin</th><th>Vede</th><th>Ultimo accesso</th><th>Può entrare</th><th></th></tr></thead><tbody>' +
     UTENTI.map((u, i) => {
       const admin = u.sezioni.includes('admin');
       const cella = s => `<td><input type="checkbox" data-i="${i}" data-sez="${s}"
@@ -91,6 +91,8 @@ function disegna() {
         <td><input type="checkbox" data-i="${i}" data-sez="admin" ${admin ? 'checked' : ''}></td>
         ${celleVede(u, i)}
         <td>${dataLeggibile(u.ultimo_accesso)}</td>
+        <td><input type="checkbox" class="ac-attivo" data-i="${i}" ${u.attivo ? 'checked' : ''}
+             title="Toglierlo gli impedisce di entrare. È una cosa diversa dal segnarlo uscito dal team."></td>
         <td><button class="ac-save" data-i="${i}">Salva</button>
             <span class="ac-msg" data-i="${i}"></span></td>
       </tr>` + pannelloPicker(u, i);
@@ -102,6 +104,16 @@ function disegna() {
       const sez = cb.dataset.sez;
       u.sezioni = cb.checked ? [...new Set([...u.sezioni, sez])] : u.sezioni.filter(s => s !== sez);
       if (sez === 'admin') disegna();   // admin implica tutto: le altre caselle si disabilitano
+    };
+  });
+
+  // l'accesso è un interruttore: si applica subito, senza passare dal Salva
+  tb.querySelectorAll('input.ac-attivo').forEach(cb => {
+    cb.onchange = async () => {
+      const u = UTENTI[+cb.dataset.i];
+      const { error } = await supabase.rpc('ms_imposta_attivo', { p_user: u.user_id, p_attivo: cb.checked });
+      if (error) { cb.checked = !cb.checked; alert('Non sono riuscito a cambiare l\'accesso: ' + error.message); return; }
+      u.attivo = cb.checked;
     };
   });
 
