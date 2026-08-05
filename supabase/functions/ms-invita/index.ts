@@ -1,22 +1,29 @@
-// manager-stats · invito di un membro del team
+// manager-stats · invito di un membro del team  (v2: il WhatsApp lo manda n8n)
 //
 // Crea (o ritrova) l'utente su Supabase Auth, gli prepara il link di accesso, gli
 // dà le sezioni iniziali e lo collega alla persona in anagrafica. Poi consegna il
-// link via WhatsApp o email — e comunque lo restituisce, così l'admin può sempre
-// copiarlo e mandarlo a mano se un canale non consegna.
+// link — e comunque lo restituisce, così l'admin può sempre copiarlo e mandarlo a
+// mano se un canale non consegna.
 //
 // Sicurezza: verify_jwt = true, e in più si controlla che CHI CHIAMA sia admin di
 // manager-stats (rpc ms_puo('admin') col suo token). Il sito è pubblico, quindi
 // nessun segreto condiviso può stare nel browser: l'unica credenziale che viaggia
-// è il JWT dell'utente. È la differenza con la EF `admin-members` dell'Academy,
-// che usa x-admin-secret perché la chiamano degli script, non un browser.
+// da lì è il JWT dell'utente.
+//
+// WhatsApp: il token Wassenger vive in una credenziale n8n e le credenziali n8n non
+// sono leggibili via API — quindi non si sposta. Manda n8n, e questa funzione gli
+// dice cosa scrivere e a chi. Il webhook n8n è protetto da un header segreto che
+// sta nel database (leggibile solo da service_role, come academy_secret): così non
+// serve nessun secret sulla funzione e il segreto non passa mai dal browser.
+// NON si inoltra il JWT dell'admin a n8n: darebbe a un terzo sistema un token che
+// per la sua durata residua può agire come lui.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const URL = Deno.env.get("SUPABASE_URL")!;
 const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const WASSENGER = Deno.env.get("WASSENGER_TOKEN") ?? "";
 const APP_URL = Deno.env.get("MS_APP_URL") ?? "https://mach10account.github.io/manager-stats/";
+const WA_WEBHOOK = Deno.env.get("MS_WA_WEBHOOK") ?? "https://n8n.srv1035791.hstgr.cloud/webhook/ms-invito-wa-7c1e94";
 
 const admin = createClient(URL, SERVICE);
 
@@ -30,6 +37,15 @@ const json = (body: unknown, status = 200) =>
 function numeroWa(tel: string): string {
   const n = String(tel).replace(/[^0-9]/g, "").replace(/^00/, "");
   return n.startsWith("39") ? n : "39" + n.replace(/^0+/, "");
+}
+
+let segretoWa: string | null = null;
+async function segretoWebhook(): Promise<string> {
+  if (segretoWa) return segretoWa;
+  const { data, error } = await admin.rpc("ms_segreto", { p_nome: "wa_webhook" });
+  if (error || !data) throw new Error("segreto del webhook non leggibile: " + (error?.message ?? "vuoto"));
+  segretoWa = data as string;
+  return segretoWa;
 }
 
 Deno.serve(async (req) => {
@@ -119,18 +135,27 @@ Deno.serve(async (req) => {
     }
 
     if (canale === "whatsapp") {
-      if (!WASSENGER) {
-        avviso = "manca il token Wassenger nei secret della funzione: usa il link qui sotto";
-      } else {
-        const testo = `Ciao${nome ? " " + nome : ""}! Ecco il tuo accesso a Manager Stats.\n\n` +
-          `Apri questo link e imposta la password:\n${url}\n\nÈ personale, non girarlo.`;
-        const r = await fetch("https://api.wassenger.com/v1/messages", {
+      const testo = `Ciao${nome ? " " + nome : ""}! Ecco il tuo accesso a Manager Stats.\n\n` +
+        `Apri questo link e imposta la password:\n${url}\n\nÈ personale, non girarlo.`;
+      try {
+        const r = await fetch(WA_WEBHOOK, {
           method: "POST",
-          headers: { "content-type": "application/json", token: WASSENGER },
-          body: JSON.stringify({ phone: "+" + numeroWa(telefono), message: testo }),
+          headers: { "content-type": "application/json", "x-ms-token": await segretoWebhook() },
+          body: JSON.stringify({ telefono: "+" + numeroWa(telefono), testo }),
         });
-        if (!r.ok) avviso = "WhatsApp non partito (" + r.status + "): usa il link qui sotto";
-        else inviato = "whatsapp";
+        const risposta = await r.text();
+        // n8n risponde 200 anche quando Wassenger rifiuta (il nodo continua
+        // sull'errore per poterlo raccontare): la verità sta nel campo ok.
+        let esito: { ok?: boolean; errore?: string } = {};
+        try { esito = JSON.parse(risposta); } catch { /* risposta non JSON */ }
+        if (!r.ok || esito.ok === false) {
+          avviso = "WhatsApp non partito (" + (esito.errore || (r.status + " " + risposta.slice(0, 120))) +
+            "): usa il link qui sotto";
+        } else {
+          inviato = "whatsapp";
+        }
+      } catch (e) {
+        avviso = "WhatsApp non partito (" + String(e instanceof Error ? e.message : e) + "): usa il link qui sotto";
       }
     }
 
