@@ -266,6 +266,9 @@ header::before { /* alone di luce in alto a sinistra */
 /* gruppi a funnel (Panoramica): 1 Investimento → 2 Appuntamenti → 3 Vendite */
 .kpi-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
 .kpi-groups > .status { grid-column: 1 / -1; }
+/* card alte quanto il loro contenuto: con gruppi di lunghezza diversa lo stretch
+   lascia mezza card vuota (opt-in: dove i gruppi sono simili è meglio pari) */
+.kpi-groups.kpi-auto { align-items: start; }
 .kpi-group {
   position: relative;           /* niente overflow:hidden: i tooltip ⓘ escono dalla card */
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
@@ -289,6 +292,36 @@ header::before { /* alone di luce in alto a sinistra */
 .kg-tile .value { font-size: 17.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kg-hero { grid-column: 1 / -1; padding-bottom: 10px; margin-bottom: 6px; border-bottom: 1px dashed var(--grid); }
 .kg-hero .value { font-size: 31px; letter-spacing: -0.015em; }
+
+/* variante a righe (Sauron): etichetta a sinistra, numero a destra, una per riga.
+   Con etichette lunghe la griglia a colonne mandava i titoli a capo su 2-3 righe
+   e i numeri non si allineavano mai fra loro. */
+.kg-righe { grid-template-columns: 1fr; gap: 0; }
+.kg-righe .kg-tile {
+  display: grid; grid-template-columns: 1fr auto; align-items: center;
+  column-gap: 14px; padding: 7px 0; border-top: 1px solid var(--grid);
+}
+.kg-righe .kg-tile:first-child, .kg-righe .kg-hero + .kg-tile { border-top: none; }
+.kg-righe .kg-tile .label { margin-bottom: 0; }
+.kg-righe .kg-tile .value { font-size: 15.5px; text-align: right; white-space: nowrap; }
+.kg-righe .kg-tile .sub { grid-column: 1 / -1; }
+.kg-righe .kg-hero {
+  display: block; padding: 0 0 11px; margin-bottom: 2px; border-top: none;
+}
+.kg-righe .kg-hero .label { margin-bottom: 5px; }
+.kg-righe .kg-hero .value { font-size: 31px; text-align: left; }
+
+/* gruppo su due colonne: le voci si dispongono su due file di righe, così un
+   gruppo lungo riempie la riga della griglia invece di lasciare un buco */
+.kg-wide { grid-column: span 2; }
+.kg-wide .kg-righe { grid-template-columns: 1fr 1fr; column-gap: 34px; }
+.kg-wide .kg-hero { grid-column: 1 / -1; }
+.kg-wide .kg-righe .kg-tile:nth-child(-n+3) { border-top: none; }  /* hero + prima riga di ogni colonna */
+@media (max-width: 1020px) {
+  .kg-wide { grid-column: auto; }
+  .kg-wide .kg-righe { grid-template-columns: 1fr; }
+  .kg-wide .kg-righe .kg-tile:nth-child(3) { border-top: 1px solid var(--grid); }
+}
 .val-good { color: var(--good-text); }
 .val-bad { color: var(--bad-text); }
 
@@ -306,7 +339,7 @@ header::before { /* alone di luce in alto a sinistra */
 .kg-i:hover, .kg-i:focus-visible { color: var(--text-primary); outline: none; }
 .kg-i::after {
   content: attr(data-tip);
-  position: absolute; left: 12px; right: 12px; top: calc(100% + 7px); z-index: 40;
+  position: absolute; left: 12px; right: 12px; max-width: 520px; top: calc(100% + 7px); z-index: 40;
   padding: 9px 12px; border-radius: 11px;
   background: var(--text-primary); color: var(--page);
   box-shadow: 0 10px 28px -12px rgba(16, 42, 84, 0.55);

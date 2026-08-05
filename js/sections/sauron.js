@@ -464,7 +464,7 @@ function renderKPI() {
       { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
         info: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
     ] },
-    { step: 5, title: 'Azienda', tiles: [
+    { step: 5, title: 'Azienda', wide: true, tiles: [
       { label: 'Riempimento team', value: riempTot.quota === null ? '—' : pctFrac(riempTot.quota), hero: true,
         tone: riempTot.quota === null ? undefined
           : (riempTot.quota >= 0.95 ? 'bad' : (riempTot.quota >= 0.75 ? undefined : 'good')),
@@ -493,7 +493,7 @@ function renderKPI() {
       { label: 'ROI', value: roi === null ? '—' : pctFrac(roi), tone: roi === null ? undefined : (roi >= 0 ? 'good' : 'bad'),
         info: 'margine netto ÷ costi del mese' },
     ] },
-  ]);
+  ], { righe: true });
 }
 
 // ── trend mensile ────────────────────────────────────────────────────────────
@@ -543,7 +543,7 @@ const giorniRitardo = iso => Math.floor((todayRome() - new Date(iso + 'T00:00:00
 
 // ── tab Dashboard ────────────────────────────────────────────────────────────
 const DASH_HTML = `
-  <div class="kpi-groups" id="fnKpi"></div>
+  <div class="kpi-groups kpi-auto" id="fnKpi"></div>
 
   <div class="card">
     <h2>Andamento mensile</h2>

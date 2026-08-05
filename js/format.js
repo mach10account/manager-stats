@@ -1,7 +1,11 @@
 // manager-stats · helper di formattazione (portati da chiamate-stats + KPI marketing)
 
-export const fmt  = n => (n === null || n === undefined || isNaN(n)) ? '—' : Math.round(n).toLocaleString('it-IT');
-export const fmt1 = n => (n === null || n === undefined || isNaN(n)) ? '—' : (Math.round(n * 10) / 10).toLocaleString('it-IT');
+// ⚠️ useGrouping:'always' — in italiano il separatore di default parte da 5 cifre
+// (minimumGroupingDigits: 2), quindi "3753 €" accanto a "74.793 €" nella stessa
+// card. Sui browser vecchi il valore non è riconosciuto e si torna al default.
+const IT = { useGrouping: 'always' };
+export const fmt  = n => (n === null || n === undefined || isNaN(n)) ? '—' : Math.round(n).toLocaleString('it-IT', IT);
+export const fmt1 = n => (n === null || n === undefined || isNaN(n)) ? '—' : (Math.round(n * 10) / 10).toLocaleString('it-IT', IT);
 
 // pct(a,b) → percentuale 0-100 (o null); fmtPct la formatta "x,y%"
 export const pct    = (a, b) => b > 0 ? (100 * a / b) : null;
@@ -10,8 +14,8 @@ export const fmtMin = s => !s ? '—' : Math.round(s / 60).toLocaleString('it-IT
 
 // KPI marketing
 export const safeDiv = (a, b) => (b === null || b === undefined || b <= 0) ? null : a / b;      // frazione (o null)
-export const eur     = n => (n === null || n === undefined || isNaN(n)) ? '—' : Math.round(n).toLocaleString('it-IT') + ' €';
-export const eur2    = n => (n === null || n === undefined || isNaN(n)) ? '—' : n.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';  // costo con centesimi (CPL/CPA…)
+export const eur     = n => (n === null || n === undefined || isNaN(n)) ? '—' : Math.round(n).toLocaleString('it-IT', IT) + ' €';
+export const eur2    = n => (n === null || n === undefined || isNaN(n)) ? '—' : n.toLocaleString('it-IT', { ...IT, minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';  // costo con centesimi (CPL/CPA…)
 export const ratio   = n => (n === null || n === undefined || isNaN(n) || !isFinite(n)) ? '—' : (Math.round(n * 10) / 10).toLocaleString('it-IT') + 'x';
 export const pctFrac = frac => (frac === null || frac === undefined || isNaN(frac)) ? '—' : Math.round(frac * 100).toLocaleString('it-IT') + '%';
 

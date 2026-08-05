@@ -65,19 +65,26 @@ function labelConInfo(label, info) {
   return `${testa}<span class="kg-nb">${coda}${icona}</span>`;
 }
 
-// gruppi KPI a funnel: [{ step, title, tiles: [{ label, value, sub, info, hero, tone }] }]
+// gruppi KPI a funnel: [{ step, title, wide, tiles: [{ label, value, sub, info, hero, tone }] }]
+// wide = il gruppo occupa due colonne della griglia (per quelli con molte voci:
+//        riempie la riga invece di lasciare una colonna vuota accanto)
 // hero = metrica principale del gruppo (grande, su riga propria) · tone = 'good'|'bad'
 // sub  = riga di testo sempre visibile sotto il numero
 // info = stessa spiegazione ma dentro una ⓘ accanto al titolo, in hover: per le
 //        tile con spiegazioni lunghe, che a vista sono solo rumore
-export function renderKpiGroups(el, groups) {
+// opts.righe = metriche secondarie una per riga (etichetta a sinistra, numero a
+// destra) invece che affiancate: serve dove le etichette sono lunghe e in colonna
+// andavano a capo lasciando tile spaiate. Le etichette corte stanno meglio in
+// colonna, quindi resta una scelta della sezione.
+export function renderKpiGroups(el, groups, opts) {
+  const righe = !!(opts && opts.righe);
   el.innerHTML = groups.map(g => `
-    <section class="kpi-group">
+    <section class="kpi-group${g.wide ? ' kg-wide' : ''}">
       <div class="kg-head">
         ${g.step ? `<span class="kg-step">${g.step}</span>` : ''}
         <h3 class="kg-title">${g.title}</h3>
       </div>
-      <div class="kg-tiles">
+      <div class="kg-tiles${righe ? ' kg-righe' : ''}">
         ${g.tiles.map(t => `
           <div class="kg-tile${t.hero ? ' kg-hero' : ''}">
             <div class="label">${t.info ? labelConInfo(t.label, t.info) : t.label}</div>
