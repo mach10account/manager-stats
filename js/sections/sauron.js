@@ -66,6 +66,10 @@ const TABS = [
   ['delivery', 'Delivery'], ['clienti', 'Clienti & LTV'], ['report', 'Report'],
 ];
 let mktSort = { key: 'mese', dir: -1 };
+// Delivery: di default fuori dall'elenco chi non ha nessun cliente gestito e
+// nessuna capienza impostata — quasi sempre assegnazioni rimaste su clienti persi.
+// Il bottone qui sopra le tabelle li rimette, senza dover togliere nessuno dal team.
+let mostraSenzaCarico = false;
 let ruoloSort = { PM: { key: 'gestiti', dir: -1 }, BEAUTY: { key: 'gestiti', dir: -1 }, MEDIA_BUYER: { key: 'gestiti', dir: -1 } };
 let ltvSort = { key: 'incassato', dir: -1 };
 const costiSort = {};                        // per reparto
@@ -1414,9 +1418,15 @@ function rinnoviChurn() {
 
 function renderDelivery() {
   const perRuoloRighe = {};
+  let nascoste = 0;
   RUOLI_CAP.forEach(R => {
-    perRuoloRighe[R.key] = caricoPerRuolo(R.key)
-      .filter(r => r.gestiti > 0 || r.rinnovi > 0 || r.incassato > 0 || capImpostata(R.key, r.pm));
+    const tutte = caricoPerRuolo(R.key);
+    // il metro è lo stesso della colonna Saturazione: i clienti su cui si lavora
+    // adesso. Una capienza a 0 non tiene in elenco: significa "non fa questo ruolo".
+    const conCarico = r => r.carico > 0
+      || (capImpostata(R.key, r.persona_id) && capDi(R.key, r.persona_id) > 0);
+    nascoste += tutte.filter(r => !conCarico(r)).length;
+    perRuoloRighe[R.key] = mostraSenzaCarico ? tutte : tutte.filter(conCarico);
   });
   const riemp = {};
   RUOLI_CAP.forEach(R => { riemp[R.key] = riempimentoRuolo(R.key); });
@@ -1440,6 +1450,17 @@ function renderDelivery() {
 
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnDelKpi"></div>
+
+    <div class="sm-head">
+      <div>
+        <h2 class="sm-title">Carico del team</h2>
+        <div class="sm-sub">Chi non ha nessun cliente su cui lavorare adesso, e nessuna capienza
+          impostata, resta fuori dagli elenchi: quasi sempre sono assegnazioni rimaste su clienti persi
+          o parcheggiati. Se gli riassegni qualcuno torna da solo.</div>
+      </div>
+      <label class="tm-toggle"><input type="checkbox" id="fnMostraTutti"${mostraSenzaCarico ? ' checked' : ''}>
+        Mostra tutti${nascoste ? ' (' + nascoste + ' fuori elenco)' : ''}</label>
+    </div>
 
     ${RUOLI_CAP.map(R => `
     <div class="card">
@@ -1527,6 +1548,9 @@ function renderDelivery() {
   });
 
   // le capienze si salvano appena esci dal campo (o premi Invio)
+  const tutti = _mount.querySelector('#fnMostraTutti');
+  if (tutti) tutti.onchange = () => { mostraSenzaCarico = tutti.checked; renderDelivery(); };
+
   _mount.querySelectorAll('input.cap-inp').forEach(inp => {
     inp.onchange = () => salvaCapacita(inp.dataset.ruolo, inp.dataset.persona, inp.value);
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
