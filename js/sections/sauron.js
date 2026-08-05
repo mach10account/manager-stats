@@ -45,6 +45,12 @@ const addYm = (m, n) => {
 };
 const fineMese = m => dstr(new Date(+m.slice(0, 4), +m.slice(5, 7), 0));
 const dtIt = v => v ? v.split('-').reverse().join('/') : '—';
+// giorno in cui l'insoluto del mese m è completo: 7 giorni dopo l'ultima scadenza
+// (prima di allora la coda del mese è ancora dentro la tolleranza bonifici)
+const meseCompletoIl = m => {
+  const f = fineMese(m);
+  return dstr(new Date(+f.slice(0, 4), +f.slice(5, 7) - 1, +f.slice(8, 10) + 7));
+};
 // mesi pieni fra due date ISO (per durata cliente e LTV)
 const mesiTra = (a, b) => {
   if (!a || !b) return null;
@@ -205,7 +211,9 @@ function insolute(m, soloMese) {
   const oggi = todayRome();
   oggi.setDate(oggi.getDate() - 7);
   const cut = dstr(oggi) < fineMese(m) ? dstr(oggi) : fineMese(m);
-  const t = { scadute: 0, nonIncassate: 0, nScadute: 0, nNonIncassate: 0, righe: [] };
+  // cut e parziale servono a raccontarlo nella ⓘ: finché il mese non è tutto
+  // "scaduto da 7 giorni" il totale è per forza più basso di Previsto nel mese.
+  const t = { cut, parziale: cut < fineMese(m), scadute: 0, nonIncassate: 0, nScadute: 0, nNonIncassate: 0, righe: [] };
   for (const r of incassi()) {
     if (!r.data_scadenza || r.data_scadenza > cut) continue;
     if (soloMese && ymOf(r.data_scadenza) !== m) continue;
@@ -429,12 +437,22 @@ function renderKPI() {
       { label: 'Rate da incassare nel mese', value: eur(sc.daIncassare), hero: true,
         info: fmt(sc.nRate) + ' rate in scadenza a ' + ymLabel(MESE) + ' non ancora incassate' },
       { label: 'Previsto nel mese', value: eur(sc.previsto), info: 'tutte le rate in scadenza nel mese' },
-      { label: 'Già incassato sulle scadenze', value: eur(sc.incassato), info: fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto' },
+      { label: 'Già incassato sulle scadenze', value: eur(sc.incassato),
+        info: fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto. Sono le rate che SCADEVANO a '
+          + ymLabel(MESE) + ' e risultano pagate, in qualunque momento siano entrate — anche in anticipo o '
+          + 'in ritardo. È un altro conto rispetto a "Incassato del mese", che è la cassa arrivata a '
+          + ymLabel(MESE) + ' da qualsiasi scadenza, arretrato compreso: i due numeri non coincidono mai.' },
       { label: 'Insolute del mese (>7gg)', value: fmtPct(insPct), tone: ins.nonIncassate > 0 ? 'bad' : 'good',
         info: ins.nScadute === 0
           ? 'nessuna rata di ' + ymLabel(MESE) + ' è ancora scaduta da oltre 7 giorni'
-          : eur(ins.nonIncassate) + ' mai incassati su ' + eur(ins.scadute) + ' scaduti a ' + ymLabel(MESE)
-            + ' · arretrato totale fino a qui ' + eur(insTot.nonIncassate) },
+          : eur(ins.nonIncassate) + ' mai incassati su ' + eur(ins.scadute)
+            + (ins.parziale
+              ? ' di scadenze dall\'1 al ' + dtIt(ins.cut) + '. Contano solo le rate scadute da più di 7 giorni: '
+                + 'le ultime di ' + ymLabel(MESE) + ' entrano nel conto il ' + dtIt(meseCompletoIl(MESE))
+                + ', per questo il totale è più basso di "Previsto nel mese".'
+              : ' di scadenze di ' + ymLabel(MESE) + '.')
+            + ' Arretrato: ' + eur(insTot.nonIncassate) + ', tutte le rate scadute fino al ' + dtIt(ins.cut)
+            + ' e mai incassate.' },
     ] },
     { step: 4, title: 'Commerciale', tiles: [
       { label: 'Nuovi clienti', value: fmt(c.nuovi), hero: true, info: 'contratti nuovi creati nel mese' },
