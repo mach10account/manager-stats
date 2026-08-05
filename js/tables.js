@@ -50,8 +50,26 @@ export function renderKpiRow(el, tiles) {
   ).join('');
 }
 
-// gruppi KPI a funnel: [{ step, title, tiles: [{ label, value, sub, hero, tone }] }]
+// testo dentro un attributo HTML (i tooltip nascono da dati, non da costanti)
+const attr = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// titolo della tile + ⓘ. L'ultima parola e l'icona restano legate (nowrap): con
+// le etichette lunghe, che vanno a capo, l'icona finirebbe da sola su una riga.
+function labelConInfo(label, info) {
+  const icona = `<button type="button" class="kg-i" data-tip="${attr(info)}"
+      aria-label="${attr(label)}: ${attr(info)}">i</button>`;
+  const i = String(label).lastIndexOf(' ');
+  const testa = i === -1 ? '' : label.slice(0, i + 1);
+  const coda = i === -1 ? label : label.slice(i + 1);
+  return `${testa}<span class="kg-nb">${coda}${icona}</span>`;
+}
+
+// gruppi KPI a funnel: [{ step, title, tiles: [{ label, value, sub, info, hero, tone }] }]
 // hero = metrica principale del gruppo (grande, su riga propria) · tone = 'good'|'bad'
+// sub  = riga di testo sempre visibile sotto il numero
+// info = stessa spiegazione ma dentro una ⓘ accanto al titolo, in hover: per le
+//        tile con spiegazioni lunghe, che a vista sono solo rumore
 export function renderKpiGroups(el, groups) {
   el.innerHTML = groups.map(g => `
     <section class="kpi-group">
@@ -62,7 +80,7 @@ export function renderKpiGroups(el, groups) {
       <div class="kg-tiles">
         ${g.tiles.map(t => `
           <div class="kg-tile${t.hero ? ' kg-hero' : ''}">
-            <div class="label">${t.label}</div>
+            <div class="label">${t.info ? labelConInfo(t.label, t.info) : t.label}</div>
             <div class="value${t.tone ? ' val-' + t.tone : ''}">${t.value}</div>
             ${t.sub ? `<div class="sub">${t.sub}</div>` : ''}
           </div>`).join('')}

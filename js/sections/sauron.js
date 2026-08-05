@@ -395,7 +395,7 @@ function renderKPI() {
     const x = riempR[R.key];
     return { label: 'Riempimento ' + R.plur, value: x.quota === null ? '—' : pctFrac(x.quota),
       tone: x.quota === null ? undefined : (x.quota >= 0.95 ? 'bad' : (x.quota >= 0.75 ? undefined : 'good')),
-      sub: x.posti === 0
+      info: x.posti === 0
         ? 'nessuna capienza impostata: falla nella tab Delivery'
         : fmt(x.assegnati) + ' ' + x.baseTxt + ' ÷ ' + fmt(x.posti) + ' posti (' + x.persone + ' persone)'
           + (x.senza > 0 ? ' · ' + fmt(x.senza) + ' senza ' + R.plur : '') };
@@ -412,45 +412,45 @@ function renderKPI() {
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
-      { label: 'Incassato del mese', value: eur(s.tot), hero: true, sub: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
+      { label: 'Incassato del mese', value: eur(s.tot), hero: true, info: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
       { label: 'Nuovi clienti — 1ª rata pagata', value: eur(s.nuovi),
-        sub: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente partito' : ' clienti partiti') + ' nel mese · esclusi rinnovi e upsell' },
-      { label: 'Rate', value: eur(s.rate), sub: 'rate successive di clienti attivi' },
-      { label: 'Rinnovi', value: eur(s.rinnovi), sub: 'tag RINNOVO sul contratto' },
+        info: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente partito' : ' clienti partiti') + ' nel mese · esclusi rinnovi e upsell' },
+      { label: 'Rate', value: eur(s.rate), info: 'rate successive di clienti attivi' },
+      { label: 'Rinnovi', value: eur(s.rinnovi), info: 'tag RINNOVO sul contratto' },
       { label: 'Upsell', value: eur(s.upsell) },
     ] },
     { step: 2, title: 'Contrattualizzato', tiles: [
-      { label: 'Contrattualizzato del mese', value: eur(c.tot), hero: true, sub: delta(c.tot, cPrev.tot) || 'valore dei contratti creati nel mese' },
-      { label: 'Contratti firmati', value: fmt(c.n), sub: c.nuovi + ' nuovi · ' + c.rinnovi + ' rinnovi · ' + c.upsell + ' upsell' },
+      { label: 'Contrattualizzato del mese', value: eur(c.tot), hero: true, info: delta(c.tot, cPrev.tot) || 'valore dei contratti creati nel mese' },
+      { label: 'Contratti firmati', value: fmt(c.n), info: c.nuovi + ' nuovi · ' + c.rinnovi + ' rinnovi · ' + c.upsell + ' upsell' },
       { label: 'Ticket medio', value: eur(safeDiv(c.tot, c.n)) },
       { label: 'Valore rinnovi', value: eur(c.rinnoviVal) },
     ] },
     { step: 3, title: 'Da incassare', tiles: [
       { label: 'Rate da incassare nel mese', value: eur(sc.daIncassare), hero: true,
-        sub: fmt(sc.nRate) + ' rate in scadenza a ' + ymLabel(MESE) + ' non ancora incassate' },
-      { label: 'Previsto nel mese', value: eur(sc.previsto), sub: 'tutte le rate in scadenza nel mese' },
-      { label: 'Già incassato sulle scadenze', value: eur(sc.incassato), sub: fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto' },
+        info: fmt(sc.nRate) + ' rate in scadenza a ' + ymLabel(MESE) + ' non ancora incassate' },
+      { label: 'Previsto nel mese', value: eur(sc.previsto), info: 'tutte le rate in scadenza nel mese' },
+      { label: 'Già incassato sulle scadenze', value: eur(sc.incassato), info: fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto' },
       { label: 'Insolute del mese (>7gg)', value: fmtPct(insPct), tone: ins.nonIncassate > 0 ? 'bad' : 'good',
-        sub: ins.nScadute === 0
+        info: ins.nScadute === 0
           ? 'nessuna rata di ' + ymLabel(MESE) + ' è ancora scaduta da oltre 7 giorni'
           : eur(ins.nonIncassate) + ' mai incassati su ' + eur(ins.scadute) + ' scaduti a ' + ymLabel(MESE)
             + ' · arretrato totale fino a qui ' + eur(insTot.nonIncassate) },
     ] },
     { step: 4, title: 'Commerciale', tiles: [
-      { label: 'Nuovi clienti', value: fmt(c.nuovi), hero: true, sub: 'contratti nuovi creati nel mese' },
-      { label: 'Clienti rinnovati', value: fmt(c.rinnovi), sub: 'contratti di rinnovo creati nel mese' },
+      { label: 'Nuovi clienti', value: fmt(c.nuovi), hero: true, info: 'contratti nuovi creati nel mese' },
+      { label: 'Clienti rinnovati', value: fmt(c.rinnovi), info: 'contratti di rinnovo creati nel mese' },
       { label: 'Upsell effettuati', value: fmt(c.upsell) },
       { label: 'Clienti persi', value: fmt(persiMese), tone: persiMese > 0 ? 'bad' : 'good',
-        sub: 'segnati persi su Notion nel mese (churn)' },
-      { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), sub: 'valore medio dei contratti nuovi' },
+        info: 'segnati persi su Notion nel mese (churn)' },
+      { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), info: 'valore medio dei contratti nuovi' },
       { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
-        sub: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
+        info: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
     ] },
     { step: 5, title: 'Azienda', tiles: [
       { label: 'Riempimento team', value: riempTot.quota === null ? '—' : pctFrac(riempTot.quota), hero: true,
         tone: riempTot.quota === null ? undefined
           : (riempTot.quota >= 0.95 ? 'bad' : (riempTot.quota >= 0.75 ? undefined : 'good')),
-        sub: riempTot.posti === 0
+        info: riempTot.posti === 0
           ? 'nessuna capienza impostata: falle nella tab Delivery'
           : fmt(riempTot.assegnati) + ' posti occupati su ' + fmt(riempTot.posti)
             + ' (' + riempTot.persone + ' persone nei tre reparti) · media dei reparti '
@@ -458,22 +458,22 @@ function renderKPI() {
       tileRiemp(RUOLI_CAP[0]),
       tileRiemp(RUOLI_CAP[1]),
       tileRiemp(RUOLI_CAP[2]),
-      { label: 'Aziende gestite', value: fmt(gestiti.length), sub: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
+      { label: 'Aziende gestite', value: fmt(gestiti.length), info: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
       { label: 'Costi del mese', value: eur(p.costiTot),
-        sub: p.fonte === 'foglio'
+        info: p.fonte === 'foglio'
           ? 'diretti ' + eur(p.costiDiretti) + ' + operativi ' + eur(p.operativi)
             + ' + strutturali ' + eur(p.strutturali) + ' · ' + fonteTxt
           : 'voci ' + eur(cm.manuali) + ' + commissioni ' + eur(cm.comm.tot) + (cm.rimborsi > 0 ? ' + rimborsi ' + eur(cm.rimborsi) : '') },
       { label: 'EBITDA', value: eur(p.ebitda), tone: p.ebitda >= 0 ? 'good' : 'bad',
-        sub: (p.pctEbitda !== null ? pctFrac(p.pctEbitda) + " dell'incassato netto · " : '')
+        info: (p.pctEbitda !== null ? pctFrac(p.pctEbitda) + " dell'incassato netto · " : '')
           + (p.fonte === 'foglio' ? fonteTxt
             : 'esclusi investimenti e asset' + (cm.capex > 0 ? ' (' + eur(cm.capex) + ')' : '')) },
       { label: 'Margine netto', value: eur(p.cashFlow), tone: p.cashFlow >= 0 ? 'good' : 'bad',
-        sub: p.fonte === 'foglio'
+        info: p.fonte === 'foglio'
           ? 'sul foglio non c\'è una riga investimenti: coincide con l\'EBITDA'
           : 'incassato − tutti i costi del mese, capex e rimborsi inclusi' },
       { label: 'ROI', value: roi === null ? '—' : pctFrac(roi), tone: roi === null ? undefined : (roi >= 0 ? 'good' : 'bad'),
-        sub: 'margine netto ÷ costi del mese' },
+        info: 'margine netto ÷ costi del mese' },
     ] },
   ]);
 }

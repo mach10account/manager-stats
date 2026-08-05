@@ -267,13 +267,13 @@ header::before { /* alone di luce in alto a sinistra */
 .kpi-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
 .kpi-groups > .status { grid-column: 1 / -1; }
 .kpi-group {
-  position: relative; overflow: hidden;
+  position: relative;           /* niente overflow:hidden: i tooltip ⓘ escono dalla card */
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
   padding: 15px 18px 13px 21px; box-shadow: var(--shadow-card);
 }
 .kpi-group::before { /* filo brand sul bordo sinistro */
   content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-  background: var(--brand-grad);
+  background: var(--brand-grad); border-radius: 16px 0 0 16px;
 }
 .kg-head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
 .kg-step {
@@ -291,6 +291,32 @@ header::before { /* alone di luce in alto a sinistra */
 .kg-hero .value { font-size: 31px; letter-spacing: -0.015em; }
 .val-good { color: var(--good-text); }
 .val-bad { color: var(--bad-text); }
+
+/* ⓘ accanto al titolo della tile: la spiegazione compare in hover, così la
+   dashboard resta titolo + numero. Il fumetto è ancorato alla CARD (non
+   all'icona) e largo quanto lei: non esce mai dallo schermo. */
+.kg-nb { white-space: nowrap; }   /* ultima parola + ⓘ non si separano mai */
+.kg-i {
+  display: inline-grid; place-items: center; vertical-align: -2px;
+  width: 13px; height: 13px; margin-left: 5px; padding: 0; flex: none;
+  border: 1px solid currentColor; border-radius: 50%; background: none;
+  color: var(--muted); cursor: help;
+  font: 700 8.5px/1 var(--font-ui); letter-spacing: 0; text-transform: none;
+}
+.kg-i:hover, .kg-i:focus-visible { color: var(--text-primary); outline: none; }
+.kg-i::after {
+  content: attr(data-tip);
+  position: absolute; left: 12px; right: 12px; top: calc(100% + 7px); z-index: 40;
+  padding: 9px 12px; border-radius: 11px;
+  background: var(--text-primary); color: var(--page);
+  box-shadow: 0 10px 28px -12px rgba(16, 42, 84, 0.55);
+  font: 500 11.5px/1.45 var(--font-ui); letter-spacing: 0; text-transform: none;
+  text-align: left; white-space: normal;
+  opacity: 0; visibility: hidden; transform: translateY(-3px);
+  transition: opacity .13s ease, transform .13s ease;
+}
+.kg-i:hover::after, .kg-i:focus-visible::after { opacity: 1; visibility: visible; transform: none; }
+@media (hover: none) { .kg-i:focus::after { opacity: 1; visibility: visible; transform: none; } }
 
 @media (max-width: 1020px) { .kpi-groups { grid-template-columns: 1fr; } }
 
