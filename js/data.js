@@ -54,7 +54,7 @@ let _attive = null;                           // persona_id delle persone ancora
 
 export async function loadPersone() {
   if (_nomi) return _nomi;
-  const { data, error } = await supabase.from('v_ms_nomi').select('chiave,nome,persona_id,attivo');
+  const { data, error } = await supabase.from('v_ms_nomi').select('chiave,nome,persona_id,attivo,ruoli');
   // un errore qui non deve impedire il render: si ripiega sui valori grezzi
   const righe = error ? [] : (data || []);
   _nomi = new Map(righe.map(r => [r.chiave, r]));
@@ -67,6 +67,15 @@ export function clearPersoneCache() { _nomi = null; _attive = null; }
 // chi è uscito dal team non occupa più un posto nei conti di capienza, ma il suo
 // nome continua a risolversi ovunque nello storico
 export function personaAttiva(pid) { return !_attive || !pid ? true : _attive.has(pid); }
+
+// il ruolo dichiarato in anagrafica. Serve a segnalare le incoerenze: se su Notion
+// un centro ha come consulente qualcuno che project manager non è, il numero non
+// va nascosto — va mostrato con un avviso.
+export function personaHaRuolo(raw, ruolo) {
+  const r = (_nomi || new Map()).get(key(raw));
+  if (!r || !Array.isArray(r.ruoli)) return true;   // in dubbio non si segnala niente
+  return r.ruoli.indexOf(ruolo) !== -1;
+}
 
 // I rollup Notion arrivano anche come liste ("Vito ,Simone Alessandrini") e come
 // array: si risolve pezzo per pezzo e si deduplica. Quello che non si conosce

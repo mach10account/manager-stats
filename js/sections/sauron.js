@@ -26,7 +26,7 @@
 // · EBITDA              = ricavi netti − costi correnti − commissioni, ESCLUSI
 //                         investimenti e asset · Cash flow = EBITDA − capex
 import { supabase } from '../supabase.js';
-import { fetchAll, nomeDi, personaDi, chiavePersona, personaAttiva } from '../data.js';
+import { fetchAll, nomeDi, personaDi, chiavePersona, personaAttiva, personaHaRuolo } from '../data.js';
 import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
 import { renderLineChart } from '../charts.js';
 import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, ratio, safeDiv, fmtCompact, dstr, todayRome, esc } from '../format.js';
@@ -1253,6 +1253,10 @@ const RUOLI_CAP = [
 ];
 const RUOLO = k => RUOLI_CAP.find(x => x.key === k);
 const NON_ASSEGNATO = '(non assegnato)';
+// chi è stato tolto dal team in Accessi → Team non deve restare in elenco come se
+// lavorasse ancora, ma i suoi clienti non spariscono: finiscono tutti in una riga
+// sola, altrimenti il carico del reparto sembrerebbe più basso di quello che è.
+const USCITI = '(non più nel team)';
 
 let CAP = new Map();                          // "RUOLO|persona_id" → capienza
 function rebuildCap() {
@@ -1277,15 +1281,20 @@ function caricoPerRuolo(ruolo) {
   // fare una riga sola, e "Simone Alessandrini" (che entra dal ripiego sugli
   // incassi, più sotto) non deve litigare con smnalessandrini@gmail.com.
   const get = raw => {
-    const k = raw === NON_ASSEGNATO ? NON_ASSEGNATO : chiavePersona(raw);
+    const pid = raw === NON_ASSEGNATO ? null : personaDi(raw);
+    const fuori = pid !== null && !personaAttiva(pid);
+    const k = raw === NON_ASSEGNATO ? NON_ASSEGNATO : (fuori ? USCITI : chiavePersona(raw));
     let a = m.get(k);
     if (!a) {
-      a = { chiave: k, persona_id: raw === NON_ASSEGNATO ? null : personaDi(raw),
-            pm: raw === NON_ASSEGNATO ? NON_ASSEGNATO : nomeDi(raw), ruolo,
+      a = { chiave: k, persona_id: fuori ? null : pid,
+            pm: k === NON_ASSEGNATO ? NON_ASSEGNATO : (fuori ? USCITI : nomeDi(raw)),
+            ruoloOk: k === NON_ASSEGNATO || fuori || personaHaRuolo(raw, ruolo),
+            usciti: new Set(), ruolo,
             gestiti: 0, attive: 0, operativi: 0, onboarding: 0, attesaRinnovo: 0,
             persi12m: 0, rinnovi: 0, incassato: 0 };
       m.set(k, a);
     }
+    if (fuori) a.usciti.add(pid);
     return a;
   };
   const limite12m = addYm(dstr(todayRome()).slice(0, 7), -11) + '-01';
@@ -1318,6 +1327,9 @@ function caricoPerRuolo(ruolo) {
     a.capacita = a.persona_id === null ? null : capDi(ruolo, a.persona_id);
     a.saturazione = a.capacita > 0 ? a.carico / a.capacita * 100 : null;
     a.perCliente = a.gestiti > 0 ? a.incassato / a.gestiti : null;
+    if (a.chiave === USCITI && a.usciti.size) {
+      a.pm = USCITI + ' — ' + a.usciti.size + (a.usciti.size === 1 ? ' persona' : ' persone');
+    }
     return a;
   });
 }
@@ -1330,7 +1342,7 @@ function riempimentoRuolo(ruolo) {
                                     && (r.gestiti > 0 || capImpostata(ruolo, r.persona_id)));
   const posti = persone.reduce((a, r) => a + (r.capacita || 0), 0);
   const assegnati = persone.reduce((a, r) => a + r.carico, 0);
-  const senza = righe.filter(r => r.pm === NON_ASSEGNATO).reduce((a, r) => a + r.carico, 0);
+  const senza = righe.filter(r => r.persona_id === null).reduce((a, r) => a + r.carico, 0);
   return { ruolo, base: R.base, baseTxt: R.baseTxt, persone: persone.length, posti, assegnati, senza,
            quota: posti > 0 ? assegnati / posti : null };
 }
@@ -1345,8 +1357,13 @@ const capCol = {
 const colsRuolo = ruolo => {
   const R = RUOLO(ruolo);
   const cols = [
-    { key: 'pm', label: R.label, fmt: (v, r) => esc(v) + (r.persona_id === null && v !== NON_ASSEGNATO
-        ? ' <span class="badge-nota" title="Non è ancora in anagrafica: aggiungila in Accessi → Team">non in anagrafica</span>' : '') },
+    { key: 'pm', label: R.label, fmt: (v, r) => esc(v) + (
+        r.chiave === USCITI
+          ? ' <span class="badge-nota" title="Tolti dal team in Accessi → Team: i loro clienti restano contati qui">fuori dal team</span>'
+          : (r.persona_id === null && v !== NON_ASSEGNATO
+            ? ' <span class="badge-nota" title="Non è ancora in anagrafica: aggiungila in Accessi → Team">non in anagrafica</span>'
+            : (r.ruoloOk === false
+              ? ' <span class="badge-nota" title="Su Notion ha clienti in questo ruolo, ma in anagrafica il ruolo non ce l\'ha: o si aggiunge il ruolo in Team, o si cambia l\'assegnazione su Notion">ruolo non suo</span>' : ''))) },
     { key: 'gestiti', label: 'Clienti gestiti', fmt },
     { key: 'operativi', label: 'Portafoglio operativo', fmt },
     { key: 'attive', label: 'Con ADS attive', fmt },
