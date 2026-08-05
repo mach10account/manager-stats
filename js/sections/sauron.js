@@ -17,6 +17,8 @@
 //                         "CONTRATTO TERMINATO CON RINNOVO" NON è un rinnovo)
 // · Contrattualizzato   = somma VALORE CONTRATTO dei contratti creati nel mese
 // · Insolute (>7gg)     = rate scadute da oltre 7 giorni e mai incassate
+// · Scadenza mancante    = vale la DATA INCASSO (rate pagate alla firma: su Notion
+//                         la scadenza resta vuota, vedi normalizzazione in buildData)
 // · Commissioni (auto)  = formule commissione Notion sugli incassi del mese
 //                         (venditore 10% · setter 5% · PM/MB/BS sui rinnovi)
 // · Ricorrenza costi    = mensile (da `data` in poi, fino a `fine`), annua
@@ -98,7 +100,16 @@ async function buildData() {
     valore: (c.valore === null || c.valore === undefined) ? null : Number(c.valore),
     venditore: Array.isArray(c.venditore) ? c.venditore.join(', ') : c.venditore,
   }));
-  return { incassi, contratti: contrattiNorm, centri, costi, capacita, marketing, vendita, funnel, pnlFoglio };
+  // Su Notion la DATA SCADENZA resta vuota quando la rata si paga alla firma
+  // (prima rata / acconto: la riga nasce già incassata e nessuno compila la
+  // scadenza). Senza data quelle righe sparivano da ogni conto di scaduto —
+  // stavano nell'incassato ma non nel denominatore dell'insoluto. Regola di Leo:
+  // se la scadenza manca vale la data di incasso. Le righe senza NESSUNA delle
+  // due (mai incassate e senza scadenza) restano fuori: non c'è niente da dedurre.
+  const incassiNorm = incassi.map(r => (r.data_scadenza || !r.data_incasso)
+    ? r
+    : { ...r, data_scadenza: r.data_incasso, scadenza_da_incasso: true });
+  return { incassi: incassiNorm, contratti: contrattiNorm, centri, costi, capacita, marketing, vendita, funnel, pnlFoglio };
 }
 
 async function ricaricaCosti() {
@@ -2004,6 +2015,11 @@ function renderReport() {
           La <b>lista di recupero</b> in fondo è invece cumulativa, dall'inizio a oggi. In entrambe una rata conta
           come scaduta solo dopo 7 giorni (tolleranza per bonifici e addebiti in viaggio) e lo stato pagato/non
           pagato è sempre quello di <i>oggi</i>: scegliendo un mese passato non si ricostruisce la fotografia di allora.</li>
+        <li><b>Rate senza DATA SCADENZA</b>: quando su Notion la scadenza è vuota vale la <b>data di incasso</b>.
+          Sono quasi sempre prime rate e acconti pagati alla firma, dove la scadenza non viene compilata perché
+          il soldo è già in cassa: senza questo ripiego finivano nell'incassato ma non nello scaduto, e il
+          <i>% insoluto</i> del mese risultava più alto del vero. Le righe che non hanno <i>né</i> scadenza <i>né</i>
+          incasso restano invece fuori da tutti i conti di scaduto e insoluto: non c'è una data da cui partire.</li>
         <li><b>Commissioni</b>: formule di Notion sulla singola rata (venditore 10%, setter 5%, PM/MB/BS sui rinnovi),
           sommate sugli incassi del mese. Non sono stime.</li>
         <li><b>Costi</b>: registro interno (tab Costi). Una voce mensile conta da <i>data inizio</i> in poi,
