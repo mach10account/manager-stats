@@ -89,8 +89,8 @@ input:focus-visible, select:focus-visible, button:focus-visible {
   outline: 3px solid var(--ring); outline-offset: 1px;
 }
 
-/* ── LOGIN ─────────────────────────────────────────────────────────────── */
-#login {
+/* ── LOGIN (e "scegli la password": stessa scenografia) ────────────────── */
+#login, #recupero {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
   padding: 24px; position: relative; overflow: hidden;
   background: var(--brand-grad);
@@ -121,24 +121,24 @@ input:focus-visible, select:focus-visible, button:focus-visible {
   color: var(--sv-azure); margin-bottom: 16px;
 }
 .login-sub { font-size: 13px; color: var(--muted); margin-bottom: 22px; }
-#loginForm { display: flex; flex-direction: column; gap: 14px; text-align: left; }
-#loginForm label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
-#loginForm input {
+#loginForm, #recuperoForm { display: flex; flex-direction: column; gap: 14px; text-align: left; }
+#loginForm label, #recuperoForm label { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); }
+#loginForm input, #recuperoForm input {
   font: inherit; font-size: 15px; padding: 11px 13px;
   background: var(--page); color: var(--text-primary);
   border: 1px solid var(--border); border-radius: 11px;
   transition: border-color .15s, box-shadow .15s;
 }
-#loginForm input:focus { border-color: var(--sv-azure); box-shadow: 0 0 0 3px var(--ring); outline: none; }
-#loginForm button {
+#loginForm input:focus, #recuperoForm input:focus { border-color: var(--sv-azure); box-shadow: 0 0 0 3px var(--ring); outline: none; }
+#loginForm button, #recuperoForm button {
   font: inherit; font-size: 15px; font-weight: 700; padding: 12px; margin-top: 6px; cursor: pointer;
   background: var(--brand-grad); color: #fff; border: none; border-radius: 12px;
   letter-spacing: 0.02em; box-shadow: 0 10px 24px -10px rgba(18, 63, 175, 0.6);
   transition: filter .15s, transform .1s;
 }
-#loginForm button:hover { filter: brightness(1.07); }
-#loginForm button:active { transform: translateY(1px); }
-#loginForm button:disabled { opacity: .6; cursor: default; }
+#loginForm button:hover, #recuperoForm button:hover { filter: brightness(1.07); }
+#loginForm button:active, #recuperoForm button:active { transform: translateY(1px); }
+#loginForm button:disabled, #recuperoForm button:disabled { opacity: .6; cursor: default; }
 .login-error { color: var(--bad-text); font-size: 13px; min-height: 18px; text-align: center; }
 
 /* ── SHELL / HEADER / NAV ──────────────────────────────────────────────── */

@@ -56,11 +56,15 @@ let currentPath = '/panoramica';
 let accessTracked = false;
 let lastTrackedPath = null;
 let loginConPassword = false;  // vero solo tra il submit del form e il SIGNED_IN che ne consegue
+let inRecupero = false;        // vero finché la schermata "scegli la password" è a schermo
+let avvisoLogin = null;        // messaggio da mostrare al prossimo showLogin() (link scaduto)
 
 // ── auth UI ───────────────────────────────────────────────────────────────────
 function showLogin() {
   $('shell').classList.add('hidden');
+  $('recupero').classList.add('hidden');
   $('login').classList.remove('hidden');
+  if (avvisoLogin) { $('loginError').textContent = avvisoLogin; avvisoLogin = null; }
   accessTracked = false; // un nuovo login nella stessa tab conta come nuovo ACCESSO
   idle.stop();           // solo il timer: i timbri li azzera chi esce davvero (vedi sessioneScaduta / Esci)
 
@@ -95,6 +99,7 @@ async function sessioneScaduta(motivo) {
 
 async function showApp(session) {
   $('login').classList.add('hidden');
+  $('recupero').classList.add('hidden');
   $('shell').classList.remove('hidden');
   // Una password appena digitata è la prova di presenza più forte che ci sia:
   // i timbri di una sessione morta senza passare da azzera() (token revocato
@@ -250,6 +255,83 @@ function initAuthUI() {
   });
 }
 
+// ── link di recupero password / primo accesso ─────────────────────────────────
+// Il link che riceve l'utente passa da Supabase, che lo verifica e rimanda qui
+// col token nel FRAMMENTO: #access_token=…&refresh_token=…&type=recovery.
+// detectSessionInUrl è false di proposito (il routing è a hash, non deve
+// litigarci): il frammento lo leggiamo qui, una volta sola, all'avvio.
+function frammentoAuth() {
+  const grezzo = String(location.hash || '').replace(/^#\/?/, '');
+  if (grezzo.indexOf('access_token=') < 0 && grezzo.indexOf('error') < 0) return null;
+  const p = new URLSearchParams(grezzo);
+  // link già usato o scaduto: Supabase rimanda qui con error/error_description
+  if (p.get('error') || p.get('error_code')) {
+    return { errore: p.get('error_description') || p.get('error_code') || p.get('error') };
+  }
+  const tipo = p.get('type');
+  if (!p.get('access_token')) return null;
+  if (tipo !== 'recovery' && tipo !== 'invite' && tipo !== 'signup') return null;
+  return { access_token: p.get('access_token'), refresh_token: p.get('refresh_token') || '' };
+}
+
+// il token non deve restare nella barra degli indirizzi né nella cronologia
+function pulisciFrammento() {
+  try { history.replaceState(null, '', location.pathname + location.search); }
+  catch (e) { location.hash = ''; }
+}
+
+async function avviaRecupero(fr) {
+  pulisciFrammento();
+  const { data, error } = await supabase.auth.setSession({
+    access_token: fr.access_token,
+    refresh_token: fr.refresh_token,
+  });
+  if (error || !data || !data.session) {
+    inRecupero = false;
+    avvisoLogin = 'Il link non è più valido: è scaduto o è già stato usato. Chiedine un altro.';
+    showLogin();
+    return;
+  }
+  const mail = data.session.user ? data.session.user.email : '';
+  setTrackUser(mail || null);
+  $('login').classList.add('hidden');
+  $('shell').classList.add('hidden');
+  $('recupero').classList.remove('hidden');
+  $('recEmail').textContent = mail || '';
+  $('recError').textContent = '';
+  $('recPassword').focus();
+}
+
+function initRecuperoUI() {
+  $('recuperoForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const err = $('recError');
+    const btn = $('recSubmit');
+    const pw = $('recPassword').value;
+    const pw2 = $('recPassword2').value;
+    err.textContent = '';
+    if (pw.length < 10) { err.textContent = 'Serve una password di almeno 10 caratteri.'; return; }
+    if (pw !== pw2) { err.textContent = 'Le due password non sono uguali.'; return; }
+    btn.disabled = true; btn.textContent = 'Salvo…';
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    btn.disabled = false; btn.textContent = 'Salva ed entra';
+    if (error) {
+      err.textContent = isAuthError(error)
+        ? 'Il link è scaduto mentre sceglievi la password. Chiedine un altro.'
+        : (error.message || 'Non sono riuscito a salvare la password.');
+      return;
+    }
+    $('recPassword').value = ''; $('recPassword2').value = '';
+    track('PASSWORD');
+    // scegliere una password vale quanto digitarla al login: i timbri di
+    // inattività ripartono da adesso (vedi la nota in showApp)
+    loginConPassword = true;
+    inRecupero = false;
+    const session = await requireSession();
+    if (session) showApp(session); else showLogin();
+  });
+}
+
 // ── avvio ─────────────────────────────────────────────────────────────────────
 let resolved = false;
 function resolve(session) {
@@ -258,12 +340,27 @@ function resolve(session) {
 }
 
 initAuthUI();
+initRecuperoUI();
+
+// Va letto PRIMA che parta l'auth: se c'è un link di recupero, la schermata
+// "scegli la password" ha la precedenza su login e app, e inRecupero deve
+// essere già vero quando arriva il SIGNED_IN di setSession.
+const FRAMMENTO = frammentoAuth();
+if (FRAMMENTO && FRAMMENTO.access_token) inRecupero = true;
+if (FRAMMENTO && FRAMMENTO.errore) {
+  pulisciFrammento();
+  avvisoLogin = 'Il link non è più valido (' + FRAMMENTO.errore + '). Chiedine un altro.';
+}
+
 onAuthStateChange((event, session) => {
   resolved = true;
   setTrackUser(session && session.user ? session.user.email : null);
+  if (inRecupero) return;          // ci pensa avviaRecupero: qui non si cambia schermata
   // Copre tutti i casi, incluso INITIAL_SESSION con session=null (primo accesso, non loggato)
   if (session) showApp(session);
   else showLogin();
 });
 // rete di sicurezza se INITIAL_SESSION non scatta
-setTimeout(async () => { if (!resolved) resolve(await requireSession()); }, 1200);
+setTimeout(async () => { if (!resolved && !inRecupero) resolve(await requireSession()); }, 1200);
+
+if (FRAMMENTO && FRAMMENTO.access_token) avviaRecupero(FRAMMENTO);

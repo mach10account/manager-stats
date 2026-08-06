@@ -33,10 +33,18 @@ const json = (body: unknown, status = 200) =>
     headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
   });
 
-// il numero come lo vuole Wassenger: solo cifre, prefisso 39 se manca
+// Il numero come lo vuole Wassenger: solo cifre, con prefisso internazionale.
+// ⚠️ Se il numero è già scritto in forma internazionale (+… oppure 00…) il suo
+// prefisso è quello e NON si tocca: dare per scontata l'Italia su un +40 lo
+// trasformerebbe in 3940… — un numero che non esiste, e il messaggio con dentro
+// il link di accesso partirebbe verso il nulla (o verso qualcun altro).
+// Senza prefisso esplicito resta l'assunzione Italia, che copre il team.
 function numeroWa(tel: string): string {
-  const n = String(tel).replace(/[^0-9]/g, "").replace(/^00/, "");
-  return n.startsWith("39") ? n : "39" + n.replace(/^0+/, "");
+  const grezzo = String(tel).trim();
+  const cifre = grezzo.replace(/[^0-9]/g, "");
+  if (grezzo.startsWith("+") || grezzo.startsWith("00")) return cifre.replace(/^00/, "");
+  if (cifre.startsWith("39")) return cifre;
+  return "39" + cifre.replace(/^0+/, "");
 }
 
 let segretoWa: string | null = null;

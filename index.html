@@ -26,7 +26,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./css/app.css?v=team4">
+<link rel="stylesheet" href="./css/app.css?v=recupero1">
 </head>
 <body>
 
@@ -71,6 +71,32 @@
       </label>
       <button type="submit" id="loginSubmit">Accedi</button>
       <div id="loginError" class="login-error"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ── SCEGLI LA PASSWORD (link di recupero / primo accesso) ─────────────── -->
+<!-- Ci si arriva dal link mandato all'utente: Supabase lo verifica e rimanda
+     qui col token nel frammento (#access_token=…&type=recovery). Senza questa
+     schermata il link non servirebbe a nulla — la sessione si aprirebbe e non
+     ci sarebbe modo di scegliersi una password con cui rientrare domani. -->
+<div id="recupero" class="hidden">
+  <svg class="login-leaf leaf-a" viewBox="0 0 200 240" aria-hidden="true"><use href="#leafSprig"/></svg>
+  <svg class="login-leaf leaf-b" viewBox="0 0 200 240" aria-hidden="true"><use href="#leafSprig"/></svg>
+  <div class="login-card">
+    <img class="login-mark" src="./assets/logo.png" alt="Salone Vincente">
+    <h1 class="login-title">Scegli la password</h1>
+    <div class="login-brand">Salone Vincente</div>
+    <p class="login-sub">Account <strong id="recEmail"></strong>: da adesso entri con questa password.</p>
+    <form id="recuperoForm" autocomplete="on">
+      <label>Nuova password
+        <input type="password" id="recPassword" autocomplete="new-password" minlength="10" required>
+      </label>
+      <label>Ripetila
+        <input type="password" id="recPassword2" autocomplete="new-password" minlength="10" required>
+      </label>
+      <button type="submit" id="recSubmit">Salva ed entra</button>
+      <div id="recError" class="login-error"></div>
     </form>
   </div>
 </div>
@@ -151,6 +177,6 @@
 <!-- ?v= da bumpare quando cambia app.js: un reload normale rivalida index.html
      ma NON i moduli in cache (max-age=600) → senza bump si può restare col
      bootstrap vecchio che non conosce le rotte nuove. -->
-<script type="module" src="./js/app.js?v=login2x"></script>
+<script type="module" src="./js/app.js?v=recupero1"></script>
 </body>
 </html>
