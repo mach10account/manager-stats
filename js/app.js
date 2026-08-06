@@ -55,6 +55,7 @@ let bootPromise = null;
 let currentPath = '/panoramica';
 let accessTracked = false;
 let lastTrackedPath = null;
+let loginConPassword = false;  // vero solo tra il submit del form e il SIGNED_IN che ne consegue
 
 // ── auth UI ───────────────────────────────────────────────────────────────────
 function showLogin() {
@@ -95,6 +96,11 @@ async function sessioneScaduta(motivo) {
 async function showApp(session) {
   $('login').classList.add('hidden');
   $('shell').classList.remove('hidden');
+  // Una password appena digitata è la prova di presenza più forte che ci sia:
+  // i timbri di una sessione morta senza passare da azzera() (token revocato
+  // da un altro device: signOut è globale) non devono poterla respingere,
+  // altrimenti il primo login "fallisce" sempre e solo il secondo entra.
+  if (loginConPassword) { loginConPassword = false; idle.azzera(); }
   // se la sessione è già oltre i limiti si esce qui, senza montare nulla
   const scaduta = idle.start(session && session.user ? session.user.id : null, sessioneScaduta);
   if (scaduta) { sessioneScaduta(scaduta); return; }
@@ -222,9 +228,12 @@ function initAuthUI() {
     btn.disabled = true; btn.textContent = 'Accesso…';
     const email = $('loginEmail').value.trim();
     const password = $('loginPassword').value;
+    // il flag va alzato PRIMA dell'await: supabase-js notifica SIGNED_IN (→ showApp)
+    // prima che signIn risolva
+    loginConPassword = true;
     const { data, error } = await signIn(email, password);
     btn.disabled = false; btn.textContent = 'Accedi';
-    if (error) { err.textContent = 'Credenziali non valide'; }
+    if (error) { loginConPassword = false; err.textContent = 'Credenziali non valide'; }
     else {
       setTrackUser(data && data.session && data.session.user ? data.session.user.email : email);
       track('LOGIN');

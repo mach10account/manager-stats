@@ -77,7 +77,7 @@ Scrive invece **l'app** (PostgREST diretto sotto RLS): `fin_costi`, `fin_capacit
 
 - `esc()` (format.js): la catena di replace DEVE iniziare da `&`, e escapa anche `"` e `'`.
 - CSP nel `<meta>` di index.html: `script-src` senza `unsafe-inline` → niente handler inline (`onclick="…"`), solo `addEventListener`.
-- `idle.js`: scadenza per **timestamp**, non countdown (il portatile che dorme); una ricarica NON azzera l'inattività; `signOut()` non lancia, torna `{error}`.
+- `idle.js`: scadenza per **timestamp**, non countdown (il portatile che dorme); una ricarica NON azzera l'inattività; `signOut()` non lancia, torna `{error}`. Un login **con password** azzera SEMPRE i timbri (flag `loginConPassword` in app.js, alzato PRIMA dell'`await signIn`): senza, i timbri di una sessione revocata da un altro device (signOut è a scope globale) respingevano il primo login e solo il secondo entrava.
 - `isAuthError` (supabase.js): `permission denied` NON è sessione scaduta.
 - Formattazione numeri: `useGrouping:'always'` (in italiano il separatore parte da 5 cifre).
 - `renderLineChart` (charts.js): `minY = Math.min(0, …)` per le serie negative (il mese in corso parte sottozero).
