@@ -6,6 +6,7 @@ import { startRouter, parseHash, navigate } from './router.js';
 import { initModal } from './modal.js';
 import { loadFreshness, clearCentriCache, loadPersone } from './data.js';
 import { esc } from './format.js';
+import { initAssistente, resetAssistente } from './assistente.js?v=1';   // ?v da bumpare quando cambia assistente.js
 import * as idle from './idle.js?v=1';   // ?v da bumpare quando cambia idle.js
 
 import * as panoramica from './sections/panoramica.js';
@@ -13,7 +14,7 @@ import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';
 import * as vendita from './sections/vendita.js';
-import * as sauron from './sections/sauron.js?v=25';   // ?v da bumpare quando cambia sauron.js (vedi nota in index.html)
+import * as sauron from './sections/sauron.js?v=26';   // ?v da bumpare quando cambia sauron.js (vedi nota in index.html)
 import * as accessi from './sections/accessi.js';
 import * as task from './sections/task.js';
 
@@ -75,6 +76,7 @@ function showLogin() {
   MIE_SEZIONI = [];
   lastTrackedPath = null;
   clearCentriCache();
+  resetAssistente();   // la conversazione non deve sopravvivere al cambio utente
 
   const pw = $('loginPassword');
   if (pw) pw.value = '';
@@ -144,6 +146,9 @@ async function boot() {
     if (sec && sec.onResize) sec.onResize();
   }, 200));
   refreshFreshness();
+  // dopo i filtri: l'assistente legge il periodo selezionato per dare senso a
+  // "questo mese" nelle domande
+  initAssistente();
   startRouter(() => renderCurrent());
 }
 

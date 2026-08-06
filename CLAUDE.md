@@ -33,7 +33,7 @@ Lingua del progetto: **italiano** (UI, commit, commenti).
 
 ## Database — Supabase, progetto `ueejjgocuvmmkxsogdvu`
 
-Prefissi: `mkt_`/`perf_`/`fb_` (marketing centri) · `calls`/`leads`/`esiti` (beauty CRM4) · `set_` (vendita B2B) · `fin_` (finance, solo admin) · `notion_` (mirror Notion) · `ms_` (piattaforma: accessi, task, persone).
+Prefissi: `mkt_`/`perf_`/`fb_` (marketing centri) · `calls`/`leads`/`esiti` (beauty CRM4) · `set_` (vendita B2B) · `fin_` (finance, solo admin) · `notion_` (mirror Notion) · `ms_` (piattaforma: accessi, task, persone) · `kb_` (procedure operative per l'assistente).
 
 **RLS per sezione**
 - `ms_accessi(user_id, email, sezioni[], attivo)` + guardia `ms_puo(area)` (**security definer**, obbligatorio: la policy di ms_accessi chiama ms_puo che legge ms_accessi → senza definer è ricorsione).
@@ -71,6 +71,7 @@ Scrive invece **l'app** (PostgREST diretto sotto RLS): `fin_costi`, `fin_capacit
 - **Coorte** = mese di CREAZIONE del lead (regola del foglio KPI, coerente con CPL/CAC/ROAS); il blocco Vendita conta per ultimo cambio stage. ⚠️ `set_opportunita` conserva solo l'ULTIMO cambio stage → i mesi passati cambiano nel tempo: documentato e accettato.
 - **Contratti** da `v_notion_contratti` (mirror del vero DB CONTRATTI), non da `fin_contratti` (che resta popolata ma non letta).
 - **P&L**: mesi chiusi dal foglio (`fin_pnl`), mese corrente calcolato. `fin_costi` è lo stato di OGGI, inutile sul passato.
+- **Churn** (Sauron → Delivery) = coorte di **FINE SERVIZIO**: dei clienti a cui il servizio finiva nel mese, quanti oggi hanno il tag `CLIENTE PERSO/SPARITO`. Numeratore e denominatore sono lo stesso gruppo. ⚠️ **Matura**: il tag arriva in media 4 mesi dopo la fine servizio → gli ultimi 3-4 mesi sono sempre sottostimati. Da non confondere con la tile **"Clienti persi"**, che conta la `DATA CLIENTE PERSO` nel mese (= quando li abbiamo *segnati*, non quando se ne sono andati; e metà dei persi non ce l'ha compilata).
 - **Nomi persone**: mai dedurli dai dati — c'è l'anagrafica `ms_persona`/`ms_persona_alias` (`nomeDi()` in data.js). Si traducono solo le ETICHETTE: le email restano le chiavi di filtri e scoping.
 
 ## Trappole note nel codice
@@ -89,6 +90,17 @@ Scrive invece **l'app** (PostgREST diretto sotto RLS): `fin_costi`, `fin_capacit
 - GitHub Pages pubblica **l'intero repo** come sito; `_config.yml` esclude `migrations/` dal sito — **non rimuovere quell'exclude**. I file restano comunque visibili su github.com.
 - Mai committare: segreti/token/service key (l'unica chiave ammessa è la publishable in `config.js`, pubblica by design), dati personali (nomi con compensi, email private del team), URL di webhook non autenticati.
 - Seed o dati sensibili: applicarli solo nel DB, nel file di migration committato lasciare uno stub.
+
+## Assistente AI (bolla flottante, ogni sezione)
+
+- `js/assistente.js` monta una bolla in basso a destra (host `#asHost` appeso al `body`, nascosto sul login da `#shell.hidden ~ #asHost`). Init dentro `boot()` **dopo** `initFilters()`: legge il periodo selezionato per dare senso a "questo mese". `resetAssistente()` in `showLogin()` — la conversazione non deve sopravvivere al cambio utente.
+- Backend: edge function **`ms-assistente`** (Claude Opus 5). Tre strumenti: `leggi_procedura`, `cerca_procedure` (RPC `kb_cerca`, full-text italiano), `interroga_dati` (PostgREST su una whitelist di viste).
+- ⚠️ **Nessun modello di permessi nuovo**: ogni query passa il **JWT dell'utente**, quindi la RLS esistente (`ms_puo`/`ms_centri_scope`) decide cosa è visibile. Non aggiungere filtri per centro "di sicurezza" nel prompt o nel codice: sarebbero decorativi e darebbero una falsa garanzia.
+- Il system prompt contiene l'**indice** delle procedure ed è marcato `cache_control` (prompt caching): tutto ciò che varia per utente o per richiesta (data, email, sezione, periodo) sta nel **secondo** blocco, non cacheato. Spostarlo nel primo blocco rompe la cache per tutti.
+- Il prompt ripete le convenzioni di calcolo qui sotto: se cambia una definizione di KPI va aggiornata **anche lì**, altrimenti l'assistente dà numeri diversi dalla dashboard.
+- Diagnostica: `POST` con `{"diagnostica": true}` → dice se il segreto Anthropic c'è, se l'apikey è iniettata e se la KB è leggibile, senza rivelare nulla.
+- Richiede il segreto **`ANTHROPIC_API_KEY`** nel progetto Supabase. Facoltativi: `ASSISTENTE_MODELLO`, `ASSISTENTE_EFFORT`.
+- Knowledge: tabella `kb_documenti`, popolata ogni notte alle 04:10 da **WF-KB** (n8n `sMTpKJfUa41Qs2Fk`) dal Drive "STRUTTURA E GESTIONE". Esclude la cartella *"da eliminare"* (flussi 01-04 superati) e gli shortcut, che sono duplicati. Le cartelle `F07 - BS/Gestione Lead` e `FO6 - Off-Boarding` sono **vuote a monte**: su quei temi l'assistente non ha materiale.
 
 ## Chi decide cosa
 
