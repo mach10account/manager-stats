@@ -262,6 +262,16 @@ function initAuthUI() {
 // litigarci): il frammento lo leggiamo qui, una volta sola, all'avvio.
 function frammentoAuth() {
   const grezzo = String(location.hash || '').replace(/^#\/?/, '');
+  // ⚠️ Portatore NOSTRO: .../#th=<token_hash>. Serve perché il giro standard di
+  // Supabase (verify → 302 sull'app col token nel frammento) rispetta la lista
+  // degli indirizzi di ritorno del progetto: finché lì non c'è l'indirizzo di
+  // manager-stats, Supabase scarta il redirect chiesto e rimanda al Site URL —
+  // che è ancora il "http://localhost:3000" di fabbrica, cioè il nulla.
+  // Con il token_hash il giro lo chiude il browser (verifyOtp), senza redirect.
+  if (/^th=/.test(grezzo)) {
+    const th = decodeURIComponent(grezzo.slice(3));
+    return th ? { token_hash: th } : null;
+  }
   if (grezzo.indexOf('access_token=') < 0 && grezzo.indexOf('error') < 0) return null;
   const p = new URLSearchParams(grezzo);
   // link già usato o scaduto: Supabase rimanda qui con error/error_description
@@ -282,10 +292,12 @@ function pulisciFrammento() {
 
 async function avviaRecupero(fr) {
   pulisciFrammento();
-  const { data, error } = await supabase.auth.setSession({
-    access_token: fr.access_token,
-    refresh_token: fr.refresh_token,
-  });
+  const { data, error } = fr.token_hash
+    ? await supabase.auth.verifyOtp({ token_hash: fr.token_hash, type: 'recovery' })
+    : await supabase.auth.setSession({
+      access_token: fr.access_token,
+      refresh_token: fr.refresh_token,
+    });
   if (error || !data || !data.session) {
     inRecupero = false;
     avvisoLogin = 'Il link non è più valido: è scaduto o è già stato usato. Chiedine un altro.';
@@ -346,7 +358,7 @@ initRecuperoUI();
 // "scegli la password" ha la precedenza su login e app, e inRecupero deve
 // essere già vero quando arriva il SIGNED_IN di setSession.
 const FRAMMENTO = frammentoAuth();
-if (FRAMMENTO && FRAMMENTO.access_token) inRecupero = true;
+if (FRAMMENTO && (FRAMMENTO.access_token || FRAMMENTO.token_hash)) inRecupero = true;
 if (FRAMMENTO && FRAMMENTO.errore) {
   pulisciFrammento();
   avvisoLogin = 'Il link non è più valido (' + FRAMMENTO.errore + '). Chiedine un altro.';
@@ -363,4 +375,4 @@ onAuthStateChange((event, session) => {
 // rete di sicurezza se INITIAL_SESSION non scatta
 setTimeout(async () => { if (!resolved && !inRecupero) resolve(await requireSession()); }, 1200);
 
-if (FRAMMENTO && FRAMMENTO.access_token) avviaRecupero(FRAMMENTO);
+if (FRAMMENTO && (FRAMMENTO.access_token || FRAMMENTO.token_hash)) avviaRecupero(FRAMMENTO);

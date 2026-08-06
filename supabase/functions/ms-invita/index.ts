@@ -116,7 +116,17 @@ Deno.serve(async (req) => {
       options: { redirectTo: APP_URL },
     });
     if (errLink) return json({ error: "link non generato: " + errLink.message }, 500);
-    const url = link?.properties?.action_link ?? "";
+    // ⚠️ NON si usa action_link. Quel link passa da /auth/v1/verify, che rispetta
+    // la lista degli indirizzi di ritorno del progetto: finché lì non c'è quello
+    // di manager-stats, Supabase scarta il redirectTo chiesto qui sopra e rimanda
+    // al Site URL — che è rimasto il "http://localhost:3000" di fabbrica. Verificato
+    // il 06/08/2026: il primo invito vero è arrivato con dentro quell'indirizzo.
+    // Col token_hash il giro lo chiude il browser (verifyOtp in app.js) e non c'è
+    // nessun redirect di mezzo. action_link resta come rete di sicurezza.
+    const hash = link?.properties?.hashed_token ?? "";
+    const url = hash
+      ? APP_URL + (APP_URL.endsWith("/") ? "" : "/") + "#th=" + encodeURIComponent(hash)
+      : (link?.properties?.action_link ?? "");
 
     // 4. riga in ms_accessi (le sezioni si affinano poi dal pannello) e
     //    collegamento alla persona in anagrafica
