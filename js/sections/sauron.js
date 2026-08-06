@@ -71,7 +71,6 @@ let mktSort = { key: 'mese', dir: -1 };
 // Il bottone qui sopra le tabelle li rimette, senza dover togliere nessuno dal team.
 let mostraSenzaCarico = false;
 let ruoloSort = { PM: { key: 'gestiti', dir: -1 }, BEAUTY: { key: 'gestiti', dir: -1 }, MEDIA_BUYER: { key: 'gestiti', dir: -1 } };
-let ltvSort = { key: 'incassato', dir: -1 };
 const costiSort = {};                        // per reparto
 
 // ── caricamento ──────────────────────────────────────────────────────────────
@@ -1659,18 +1658,6 @@ function ltvRows() {
   });
 }
 
-const ltvCols = [
-  { key: 'centro', label: 'Cliente' },
-  { key: 'incassato', label: 'Incassato totale', fmt: eur },
-  { key: 'nRate', label: 'Rate', fmt },
-  { key: 'mesi', label: 'Mesi attivo', fmt: v => v === null ? '—' : fmt(v) },
-  { key: 'perMese', label: 'Incassato / mese', fmt: v => v === null ? '—' : eur(v) },
-  { key: 'primo', label: 'Primo incasso', fmt: dtIt },
-  { key: 'ultimo', label: 'Ultimo incasso', fmt: dtIt },
-  { key: 'consulente', label: 'PM', fmt: v => esc(v ? nomeDi(v) : '—') },
-  { key: 'stato', label: 'Stato', fmt: v => v === 'perso' ? '<span class="val-bad">perso</span>' : '<span class="val-good">attivo</span>' },
-];
-
 function renderClienti() {
   const righe = ltvRows();
   const totIncassato = righe.reduce((a, r) => a + r.incassato, 0);
@@ -1708,13 +1695,6 @@ function renderClienti() {
           <td>${eur(r.contr)}</td><td>${eur(r.inc)}</td></tr>`).join('')}
         </tbody>
       </table></div>
-    </div>
-
-    <div class="card">
-      <h2>Clienti per valore incassato</h2>
-      <div class="subtitle">Tutto lo storico degli incassi, un cliente per riga. "Mesi attivo" parte da INIZIO SERVIZIO
-        (o dal primo incasso se manca) e arriva a fine servizio, all'ultimo incasso se il cliente è perso, o a oggi.</div>
-      <div class="table-scroll"><table id="fnLtv"></table></div>
     </div>`;
 
   renderKpiRow(_mount.querySelector('#fnLtvKpi'), [
@@ -1726,10 +1706,6 @@ function renderClienti() {
     { label: 'Incassato medio / mese cliente', value: eur(safeDiv(totIncassato, conMesi.reduce((a, r) => a + r.mesi, 0))),
       sub: 'quanto rende un cliente ogni mese' },
   ]);
-
-  renderTable(_mount.querySelector('#fnLtv'), ltvCols, righe, ltvSort,
-    k => { ltvSort = { key: k, dir: ltvSort.key === k ? -ltvSort.dir : -1 }; renderClienti(); },
-    { barKey: 'incassato' });
 }
 
 // ── tab Report (export) ──────────────────────────────────────────────────────
