@@ -311,7 +311,7 @@ export function initAssistente() {
         <span id="asHeadAvatar" class="as-avatar as-fallback" aria-hidden="true">AI</span>
         <div class="as-head-txt">
           <strong>Assistente</strong>
-          <span>procedure e dati della piattaforma</span>
+          <span>procedure e dati</span>
         </div>
         <button id="asStorico" type="button" title="Conversazioni salvate">Storico</button>
         <button id="asPulisci" type="button" title="Nuova conversazione">Nuova</button>
