@@ -1122,3 +1122,23 @@ span.as-avatar-big { font-size: 20px; }
 /* La bolla vive fuori da #shell (è appesa al body): senza questa regola
    resterebbe a schermo anche sulla pagina di login. */
 #shell.hidden ~ #asHost { display: none; }
+
+/* Storico conversazioni dentro il pannello dell'assistente */
+.as-lista { display: flex; flex-direction: column; gap: 4px; }
+.as-voce { display: flex; align-items: stretch; gap: 4px; border-radius: 10px; }
+.as-voce:hover { background: var(--row-hover); }
+.as-voce.corrente { background: var(--row-hover); box-shadow: inset 2px 0 0 var(--series-2, #0f9f85); }
+.as-voce-apri {
+  flex: 1; display: flex; align-items: baseline; gap: 8px; min-width: 0;
+  background: transparent; border: none; cursor: pointer; text-align: left;
+  padding: 9px 6px 9px 11px; color: var(--text-primary); font: inherit; font-size: 13px;
+}
+.as-voce-tit { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.as-voce-data { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
+.as-voce-del {
+  flex: 0 0 auto; background: transparent; border: none; cursor: pointer;
+  color: var(--muted); font-size: 12px; padding: 0 10px; border-radius: 10px;
+}
+.as-voce-del:hover { color: var(--text-primary); background: var(--border); }
+.as-voce-del:disabled { opacity: .4; cursor: default; }
+#asStorico.attivo { background: var(--brand-grad); color: #fff; border-color: transparent; }

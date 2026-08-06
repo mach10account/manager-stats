@@ -6,7 +6,7 @@ import { startRouter, parseHash, navigate } from './router.js';
 import { initModal } from './modal.js';
 import { loadFreshness, clearCentriCache, loadPersone } from './data.js';
 import { esc } from './format.js';
-import { initAssistente, resetAssistente } from './assistente.js?v=1';   // ?v da bumpare quando cambia assistente.js
+import { initAssistente, resetAssistente } from './assistente.js?v=2';   // ?v da bumpare quando cambia assistente.js
 import * as idle from './idle.js?v=1';   // ?v da bumpare quando cambia idle.js
 
 import * as panoramica from './sections/panoramica.js';

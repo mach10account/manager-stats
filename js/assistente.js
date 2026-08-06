@@ -33,7 +33,9 @@ const SPUNTI = [
   'Quali miei centri sono sotto target questo mese?',
 ];
 
-let storico = [];
+let storico = [];        // messaggi della conversazione a schermo
+let chatId = null;       // conversazione corrente lato server (null = non ancora creata)
+let vistaStorico = false;
 let aperto = false;
 let inCorso = false;
 let montato = false;
@@ -116,9 +118,93 @@ function contesto() {
   return c;
 }
 
+// ── storico delle conversazioni ──────────────────────────────────────────────
+// Le conversazioni si leggono direttamente da PostgREST: la RLS le lega a chi
+// ha fatto login, quindi non serve passare dalla edge function.
+function quando(iso) {
+  const d = new Date(iso);
+  const oggi = new Date();
+  const stessoGiorno = d.toDateString() === oggi.toDateString();
+  if (stessoGiorno) return d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+}
+
+async function disegnaStorico() {
+  const box = $('#asMsg');
+  if (!box) return;
+  box.innerHTML = '<div class="as-vuoto"><p>Carico le conversazioni…</p></div>';
+  let righe = [];
+  try {
+    const { data, error } = await supabase
+      .from('ms_chat')
+      .select('id,titolo,aggiornata_il')
+      .order('aggiornata_il', { ascending: false })
+      .limit(40);
+    if (error) throw error;
+    righe = data || [];
+  } catch (e) {
+    box.innerHTML = '<div class="as-vuoto"><p>Non riesco a caricare lo storico (' +
+      esc(e && e.message ? e.message : e) + ').</p></div>';
+    return;
+  }
+  if (!righe.length) {
+    box.innerHTML = '<div class="as-vuoto"><p>Nessuna conversazione salvata. Scrivimi qualcosa e la ritrovi qui.</p></div>';
+    return;
+  }
+  box.innerHTML = '<div class="as-lista">' + righe.map(r =>
+    '<div class="as-voce' + (r.id === chatId ? ' corrente' : '') + '">' +
+      '<button type="button" class="as-voce-apri" data-chat="' + esc(r.id) + '">' +
+        '<span class="as-voce-tit">' + esc(r.titolo) + '</span>' +
+        '<span class="as-voce-data">' + esc(quando(r.aggiornata_il)) + '</span>' +
+      '</button>' +
+      '<button type="button" class="as-voce-del" data-del="' + esc(r.id) + '" title="Elimina">✕</button>' +
+    '</div>').join('') + '</div>';
+
+  box.querySelectorAll('[data-chat]').forEach(b =>
+    b.addEventListener('click', () => apriConversazione(b.dataset.chat)));
+  box.querySelectorAll('[data-del]').forEach(b =>
+    b.addEventListener('click', async () => {
+      const id = b.dataset.del;
+      b.disabled = true;
+      try {
+        const { error } = await supabase.from('ms_chat').delete().eq('id', id);
+        if (error) throw error;
+        if (id === chatId) { chatId = null; storico = []; }
+        disegnaStorico();
+      } catch (e) { b.disabled = false; }
+    }));
+}
+
+async function apriConversazione(id) {
+  const box = $('#asMsg');
+  box.innerHTML = '<div class="as-vuoto"><p>Apro la conversazione…</p></div>';
+  try {
+    const { data, error } = await supabase
+      .from('ms_chat_messaggio')
+      .select('ruolo,testo,fonti')
+      .eq('chat_id', id)
+      .order('id', { ascending: true });
+    if (error) throw error;
+    storico = (data || []).map(m => ({ ruolo: m.ruolo, testo: m.testo, fonti: m.fonti || [] }));
+    chatId = id;
+    vistaStorico = false;
+    aggiornaTestata();
+    disegnaMessaggi();
+  } catch (e) {
+    box.innerHTML = '<div class="as-vuoto"><p>Non riesco ad aprirla (' +
+      esc(e && e.message ? e.message : e) + ').</p></div>';
+  }
+}
+
+function aggiornaTestata() {
+  const b = $('#asStorico');
+  if (b) b.classList.toggle('attivo', vistaStorico);
+}
+
 function disegnaMessaggi() {
   const box = $('#asMsg');
   if (!box) return;
+  if (vistaStorico) return;   // la lista ha la precedenza finché è aperta
 
   if (!storico.length && !inCorso) {
     box.innerHTML =
@@ -155,6 +241,9 @@ async function invia() {
   if (!testo || inCorso) return;
   input.value = '';
   input.style.height = 'auto';
+  // scrivere mentre si guarda lo storico riporta alla conversazione
+  vistaStorico = false;
+  aggiornaTestata();
   storico.push({ ruolo: 'utente', testo });
   inCorso = true;
   disegnaMessaggi();
@@ -164,9 +253,10 @@ async function invia() {
   try {
     const messaggi = storico.slice(-MAX_STORICO * 2).map(m => ({ ruolo: m.ruolo, testo: m.testo }));
     const { data, error } = await supabase.functions.invoke('ms-assistente', {
-      body: { messaggi, contesto: contesto() },
+      body: { messaggi, contesto: contesto(), chat_id: chatId },
     });
     if (error) throw error;
+    if (data && data.chat_id) chatId = data.chat_id;
     if (data && data.errore) {
       storico.push({ ruolo: 'assistente', testo: 'Non ha funzionato: ' + data.errore });
     } else {
@@ -223,6 +313,7 @@ export function initAssistente() {
           <strong>Assistente</strong>
           <span>procedure e dati della piattaforma</span>
         </div>
+        <button id="asStorico" type="button" title="Conversazioni salvate">Storico</button>
         <button id="asPulisci" type="button" title="Nuova conversazione">Nuova</button>
         <button id="asChiudi" type="button" title="Chiudi">✕</button>
       </header>
@@ -236,7 +327,20 @@ export function initAssistente() {
 
   $('#asBolla').addEventListener('click', () => apri(!aperto));
   $('#asChiudi').addEventListener('click', () => apri(false));
-  $('#asPulisci').addEventListener('click', () => { storico = []; disegnaMessaggi(); });
+  $('#asStorico').addEventListener('click', () => {
+    vistaStorico = !vistaStorico;
+    aggiornaTestata();
+    if (vistaStorico) disegnaStorico(); else disegnaMessaggi();
+  });
+  // "Nuova" stacca dalla conversazione salvata: la successiva domanda ne apre
+  // un'altra invece di accodarsi a quella vecchia.
+  $('#asPulisci').addEventListener('click', () => {
+    storico = [];
+    chatId = null;
+    vistaStorico = false;
+    aggiornaTestata();
+    disegnaMessaggi();
+  });
   $('#asForm').addEventListener('submit', e => { e.preventDefault(); invia(); });
 
   const input = $('#asInput');
@@ -256,6 +360,9 @@ export function initAssistente() {
 /** Chiamata al logout: la conversazione non deve sopravvivere al cambio utente. */
 export function resetAssistente() {
   storico = [];
+  chatId = null;
+  vistaStorico = false;
   apri(false);
+  aggiornaTestata();
   disegnaMessaggi();
 }

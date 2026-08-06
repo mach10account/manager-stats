@@ -100,6 +100,7 @@ Scrive invece **l'app** (PostgREST diretto sotto RLS): `fin_costi`, `fin_capacit
 - Il prompt ripete le convenzioni di calcolo qui sotto: se cambia una definizione di KPI va aggiornata **anche lì**, altrimenti l'assistente dà numeri diversi dalla dashboard.
 - Diagnostica: `POST` con `{"diagnostica": true}` → dice se il segreto Anthropic c'è, se l'apikey è iniettata e se la KB è leggibile, senza rivelare nulla.
 - Richiede il segreto **`ANTHROPIC_API_KEY`** nel progetto Supabase. Facoltativi: `ASSISTENTE_MODELLO`, `ASSISTENTE_EFFORT`.
+- Storico: `ms_chat` + `ms_chat_messaggio`, RLS su `auth.uid() = user_id` — **le conversazioni non le legge nessun altro, admin compresi** (qui non c'è `ms_puo`). La edge function salva la domanda *prima* di chiamare il modello, così una risposta mai arrivata non fa sparire la conversazione. La lista e l'apertura passano da PostgREST diretto (supabase-js), non dalla funzione.
 - Knowledge: tabella `kb_documenti`, popolata ogni notte alle 04:10 da **WF-KB** (n8n `sMTpKJfUa41Qs2Fk`) dal Drive "STRUTTURA E GESTIONE". Esclude la cartella *"da eliminare"* (flussi 01-04 superati) e gli shortcut, che sono duplicati. Le cartelle `F07 - BS/Gestione Lead` e `FO6 - Off-Boarding` sono **vuote a monte**: su quei temi l'assistente non ha materiale.
 
 ## Chi decide cosa

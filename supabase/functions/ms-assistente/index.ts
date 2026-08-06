@@ -109,6 +109,32 @@ async function rpc(nome: string, args: unknown, jwt: string) {
   return testo ? JSON.parse(testo) : [];
 }
 
+/** INSERT su PostgREST con il token dell'utente (la RLS lega la riga a lui). */
+async function pgInsert(tabella: string, righe: unknown, jwt: string, ritorna = false) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${tabella}`, {
+    method: "POST",
+    headers: {
+      apikey: ANON || jwt,
+      Authorization: `Bearer ${jwt}`,
+      "Content-Type": "application/json",
+      Prefer: ritorna ? "return=representation" : "return=minimal",
+    },
+    body: JSON.stringify(righe),
+  });
+  const testo = await r.text();
+  if (!r.ok) throw new Error(`${r.status} ${testo.slice(0, 300)}`);
+  return testo ? JSON.parse(testo) : [];
+}
+
+/** Titolo leggibile per lo storico, ricavato dalla prima domanda. */
+function titoloDa(testo: string) {
+  const t = String(testo).replace(/\s+/g, " ").trim();
+  if (t.length <= 60) return t || "Nuova conversazione";
+  const taglio = t.slice(0, 60);
+  const spazio = taglio.lastIndexOf(" ");
+  return (spazio > 30 ? taglio.slice(0, spazio) : taglio) + "…";
+}
+
 const STRUMENTI = [
   {
     name: "leggi_procedura",
@@ -428,6 +454,36 @@ ${indice}`;
       content: String(m.testo).slice(0, 8000),
     }));
 
+  // ── storico ────────────────────────────────────────────────────────────────
+  // La domanda si salva PRIMA di interrogare il modello: se la risposta non
+  // arriva (errore, tab chiusa), la conversazione resta comunque nello storico
+  // invece di sparire.
+  let chatId = String(corpo.chat_id ?? "").trim() || null;
+  const ultimaDomanda = String(
+    messaggiIn[messaggiIn.length - 1] ? messaggiIn[messaggiIn.length - 1].testo : "",
+  );
+  try {
+    if (!chatId) {
+      const creata = await pgInsert(
+        "ms_chat",
+        [{ titolo: titoloDa(ultimaDomanda) }],
+        jwt,
+        true,
+      );
+      chatId = creata.length ? creata[0].id : null;
+    }
+    if (chatId) {
+      await pgInsert(
+        "ms_chat_messaggio",
+        [{ chat_id: chatId, ruolo: "utente", testo: ultimaDomanda }],
+        jwt,
+      );
+    }
+  } catch (e) {
+    // Lo storico non deve impedire la risposta: se fallisce si tira dritto.
+    console.error("storico non salvato:", e instanceof Error ? e.message : e);
+  }
+
   try {
     let risposta = "";
     for (let giro = 0; giro < MAX_GIRI; giro++) {
@@ -483,7 +539,19 @@ ${indice}`;
       risposta =
         "Ci ho provato ma non sono arrivato a una risposta solida. Riprova restringendo la domanda.";
     }
-    return json({ risposta, fonti: [...new Set(fonti)] });
+    const fontiUniche = [...new Set(fonti)];
+    if (chatId) {
+      try {
+        await pgInsert(
+          "ms_chat_messaggio",
+          [{ chat_id: chatId, ruolo: "assistente", testo: risposta, fonti: fontiUniche }],
+          jwt,
+        );
+      } catch (e) {
+        console.error("risposta non salvata:", e instanceof Error ? e.message : e);
+      }
+    }
+    return json({ risposta, fonti: fontiUniche, chat_id: chatId });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return json({ errore: `Assistente non disponibile: ${msg}` }, 500);

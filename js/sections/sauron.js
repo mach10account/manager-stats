@@ -1398,6 +1398,13 @@ async function salvaCapacita(ruolo, persona_id, valore) {
 }
 
 // tasso di rinnovo e churn, mese per mese (ultimi 12)
+// ⚠️ CHURN = coorte di FINE SERVIZIO: di quelli a cui il servizio finiva in quel
+// mese, quanti oggi risultano persi. Numeratore e denominatore sono lo STESSO
+// gruppo di clienti — non più "persi del mese ÷ portafoglio di oggi", che
+// confrontava due insiemi diversi con un denominatore fisso per tutti i mesi.
+// Il verdetto matura nel tempo: gli ultimi mesi hanno ancora molti "in sospeso"
+// (il tag CLIENTE PERSO/SPARITO arriva mediamente 4 mesi dopo la fine servizio),
+// quindi il churn dei mesi recenti è per forza più basso del definitivo.
 function rinnoviChurn() {
   const months = [];
   for (let i = 11; i >= 0; i--) months.push(addYm(MESE, -i));
@@ -1408,10 +1415,12 @@ function rinnoviChurn() {
     const val = rin.reduce((a, c) => a + (+c.valore || 0), 0);
     const cash = incassi().filter(r => ymOf(r.data_incasso) === m && hasTag(r.tipo_contratto, 'RINNOVO'))
       .reduce((a, r) => a + (+r.importo || 0), 0);
-    const scaduti = centriRows().filter(c => ymOf(c.fine_servizio) === m).length;
-    return { mese: m, rinnovi: rin.length, persi, valore: val, cash, scaduti,
+    const coorte = centriRows().filter(c => ymOf(c.fine_servizio) === m);
+    const persiCoorte = coorte.filter(c => !isGestito(c)).length;
+    return { mese: m, rinnovi: rin.length, persi, valore: val, cash,
+             scaduti: coorte.length, persiCoorte,
              tasso: pct(rin.length, rin.length + persi),
-             churn: gestiti > 0 ? 100 * persi / gestiti : null };
+             churn: pct(persiCoorte, coorte.length) };
   });
   return { months, righe: out, gestiti };
 }
@@ -1446,7 +1455,21 @@ function renderDelivery() {
   const ultimi = rc.righe.slice(-12);
   const rinTot = ultimi.reduce((a, r) => a + r.rinnovi, 0);
   const persiTot = ultimi.reduce((a, r) => a + r.persi, 0);
-  const churnMedio = ultimi.length ? ultimi.reduce((a, r) => a + (r.churn || 0), 0) / ultimi.length : null;
+  // ratio dai TOTALI del periodo, non media delle percentuali per riga: un mese
+  // con 10 scadenze non deve pesare quanto uno con 49.
+  const scadTot = ultimi.reduce((a, r) => a + r.scaduti, 0);
+  const persiCoorteTot = ultimi.reduce((a, r) => a + r.persiCoorte, 0);
+  const churn12 = pct(persiCoorteTot, scadTot);
+  // I due KPI in cima guardano solo gli ULTIMI 4 MESI: su 12 pesano ancora
+  // stagioni vecchie e il numero si muove con mesi di ritardo. La tabella qui
+  // sotto resta a 12 mesi con il suo totale, per il confronto storico.
+  const MESI_KPI = 4;
+  const recenti = ultimi.slice(-MESI_KPI);
+  const rinRec = recenti.reduce((a, r) => a + r.rinnovi, 0);
+  const persiRec = recenti.reduce((a, r) => a + r.persi, 0);
+  const scadRec = recenti.reduce((a, r) => a + r.scaduti, 0);
+  const persiCoorteRec = recenti.reduce((a, r) => a + r.persiCoorte, 0);
+  const churn4 = pct(persiCoorteRec, scadRec);
 
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnDelKpi"></div>
@@ -1487,27 +1510,31 @@ function renderDelivery() {
 
     <div class="card">
       <h2>Rinnovi e churn, mese per mese</h2>
-      <div class="subtitle"><strong>Tasso di rinnovo</strong> = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese.
-        <strong>Churn</strong> = clienti persi nel mese ÷ ${fmt(gestiti)} clienti oggi in gestione: il denominatore è
-        fisso (non abbiamo lo storico mensile della base gestita), quindi va letto come ordine di grandezza.
-        "Contratti in scadenza" = clienti con FINE SERVIZIO in quel mese.</div>
+      <div class="subtitle"><strong>Churn</strong> = dei clienti a cui il servizio finiva in quel mese
+        ("in scadenza"), quanti oggi risultano persi. Stesso gruppo di clienti sopra e sotto la riga di frazione.
+        ⚠️ Il verdetto matura: un cliente viene segnato perso in media <strong>4 mesi dopo</strong> la fine
+        servizio, quindi gli ultimi mesi sono ancora in sospeso e il loro churn salirà.
+        <strong>Tasso di rinnovo</strong> = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese, per data del
+        contratto e per DATA CLIENTE PERSO: è un altro conto, non il complemento del churn.</div>
       <div class="table-scroll"><table class="fn-pnl">
-        <thead><tr><th>Mese</th><th>Rinnovi</th><th>Clienti persi</th><th>Tasso di rinnovo</th><th>Churn</th><th>In scadenza</th><th>Valore rinnovi</th><th>Incassato su rinnovi</th></tr></thead>
+        <thead><tr><th>Mese</th><th>Rinnovi</th><th>Clienti persi</th><th>Tasso di rinnovo</th><th>In scadenza</th><th>Persi a scadenza</th><th>Churn</th><th>Valore rinnovi</th><th>Incassato su rinnovi</th></tr></thead>
         <tbody>
           ${ultimi.map(r => `<tr>
             <td class="name">${ymLabel(r.mese)}</td>
             <td>${fmt(r.rinnovi)}</td>
             <td>${fmt(r.persi)}</td>
             <td>${r.tasso === null ? '—' : `<span class="${r.tasso >= 30 ? 'val-good' : 'val-bad'}">${fmtPct(r.tasso)}</span>`}</td>
-            <td>${r.churn === null ? '—' : fmtPct(r.churn)}</td>
             <td>${fmt(r.scaduti)}</td>
+            <td>${fmt(r.persiCoorte)}</td>
+            <td>${r.churn === null ? '—' : `<span class="${r.churn >= 50 ? 'val-bad' : ''}">${fmtPct(r.churn)}</span>`}</td>
             <td>${eur(r.valore)}</td>
             <td>${eur(r.cash)}</td></tr>`).join('')}
           <tr class="fn-tot"><td class="name">Totale 12 mesi</td>
             <td>${fmt(rinTot)}</td><td>${fmt(persiTot)}</td>
             <td>${fmtPct(pct(rinTot, rinTot + persiTot))}</td>
-            <td>${churnMedio === null ? '—' : fmtPct(churnMedio)}</td>
-            <td>${fmt(ultimi.reduce((a, r) => a + r.scaduti, 0))}</td>
+            <td>${fmt(scadTot)}</td>
+            <td>${fmt(persiCoorteTot)}</td>
+            <td>${fmtPct(churn12)}</td>
             <td>${eur(ultimi.reduce((a, r) => a + r.valore, 0))}</td>
             <td>${eur(ultimi.reduce((a, r) => a + r.cash, 0))}</td></tr>
         </tbody>
@@ -1527,10 +1554,14 @@ function renderDelivery() {
       sub: 'posti PM impostati: ' + fmt(riemp.PM.posti) },
     { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese' },
     { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti)), sub: 'solo team delivery' },
-    { label: 'Tasso di rinnovo 12 mesi', value: fmtPct(pct(rinTot, rinTot + persiTot)),
-      sub: rinTot + ' rinnovi su ' + (rinTot + persiTot) + ' esiti' },
-    { label: 'Churn medio mensile', value: churnMedio === null ? '—' : fmtPct(churnMedio),
-      sub: 'sui clienti in gestione' },
+    { label: 'Tasso di rinnovo 4 mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
+      sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti' },
+    // ⚠️ sui 4 mesi il churn è per forza sottostimato: il tag "cliente perso"
+    // arriva in media 4 mesi dopo la fine servizio. Il sub lo dice, altrimenti
+    // un churn basso qui sopra si legge come un miglioramento che non c'è.
+    { label: 'Churn 4 mesi', value: fmtPct(churn4),
+      sub: persiCoorteRec + ' persi su ' + fmt(scadRec) + ' scadenze · ancora in maturazione'
+        + (churn12 === null ? '' : ', su 12 mesi è ' + fmtPct(churn12)) },
   ]);
 
   RUOLI_CAP.forEach(R => {
