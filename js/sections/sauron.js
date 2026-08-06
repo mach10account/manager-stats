@@ -82,7 +82,7 @@ async function buildData() {
     // mirror del DATABASE CONTRATTI di Notion: 1 riga = 1 contratto vero.
     // (fin_contratti nasceva da VALORE CONTRATTI e contava anche righe senza contratto)
     fetchAll((lo, hi) => supabase.from('v_notion_contratti')
-      .select('nome_centro,id_contratto,valore,stato,durata,agenzia,venditore,creazione_contratto')
+      .select('nome_centro,id_contratto,valore,stato,durata,agenzia,venditore,creazione_contratto,fine_servizio')
       .range(lo, hi)),
     fetchAll((lo, hi) => supabase.from('centri')
       .select('nome,agenzia,stato_attivita,consulente,beauty,media_buyer,data_cliente_perso,inizio_servizio,fine_servizio,data_rinnovo')
@@ -1396,30 +1396,61 @@ async function salvaCapacita(ruolo, persona_id, valore) {
   renderDelivery();
 }
 
+// ⚠️ CHURN = coorte di CONTRATTI IN SCADENZA: dei contratti che finivano in quel
+// mese, quanti NON hanno un contratto successivo per lo stesso centro firmato
+// entro la fine + GRAZIA_RINNOVO giorni.
+// Perché sui contratti e non sui clienti: la data di fine e quella di creazione
+// stanno sulla stessa riga e non possono divergere. Su `centri` invece FINE
+// SERVIZIO al rinnovo NON viene aggiornata in 3 casi su 4, e l'aggancio dei
+// rinnovi per nome perde il 19% dei contratti (nomi che in anagrafica non ci sono).
+// Perché la tolleranza: un rinnovo nasce in media 30 giorni DOPO la fine del
+// servizio precedente — è la firma che arriva tardi, non il cliente che se ne va.
+// Senza tolleranza il churn misurerebbe la burocrazia (92,6% invece di 84,7%).
+// Vale come rinnovo QUALUNQUE contratto successivo, anche senza tag RINNOVO: se
+// il cliente firma di nuovo non l'abbiamo perso, comunque sia etichettata la riga.
+const GRAZIA_RINNOVO = 60;
+const piuGiorni = (iso, n) => {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return dstr(d);
+};
+
 // tasso di rinnovo e churn, mese per mese (ultimi 12)
-// ⚠️ CHURN = coorte di FINE SERVIZIO: di quelli a cui il servizio finiva in quel
-// mese, quanti oggi risultano persi. Numeratore e denominatore sono lo STESSO
-// gruppo di clienti — non più "persi del mese ÷ portafoglio di oggi", che
-// confrontava due insiemi diversi con un denominatore fisso per tutti i mesi.
-// Il verdetto matura nel tempo: gli ultimi mesi hanno ancora molti "in sospeso"
-// (il tag CLIENTE PERSO/SPARITO arriva mediamente 4 mesi dopo la fine servizio),
-// quindi il churn dei mesi recenti è per forza più basso del definitivo.
 function rinnoviChurn() {
   const months = [];
   for (let i = 11; i >= 0; i--) months.push(addYm(MESE, -i));
   const gestiti = centriRows().filter(isGestito).length;
+  // centro → date di creazione di tutti i suoi contratti: serve a chiedere
+  // "dopo questa scadenza ne è nato un altro?" senza riscorrere l'elenco ogni volta
+  const dateCentro = new Map();
+  for (const c of contratti()) {
+    if (!c.creazione_contratto) continue;
+    const k = chiave(c.nome_centro);
+    if (!dateCentro.has(k)) dateCentro.set(k, []);
+    dateCentro.get(k).push(c.creazione_contratto);
+  }
+  const rinnovato = c => {
+    const limite = piuGiorni(c.fine_servizio, GRAZIA_RINNOVO);
+    const date = dateCentro.get(chiave(c.nome_centro)) || [];
+    return date.some(d => d > c.creazione_contratto && d <= limite);
+  };
   const out = months.map(m => {
     const rin = contratti().filter(c => hasTag(c.stato, 'RINNOVO') && ymOf(c.creazione_contratto) === m);
     const persi = centriRows().filter(c => ymOf(c.data_cliente_perso) === m).length;
     const val = rin.reduce((a, c) => a + (+c.valore || 0), 0);
     const cash = incassi().filter(r => ymOf(r.data_incasso) === m && hasTag(r.tipo_contratto, 'RINNOVO'))
       .reduce((a, r) => a + (+r.importo || 0), 0);
-    const coorte = centriRows().filter(c => ymOf(c.fine_servizio) === m);
-    const persiCoorte = coorte.filter(c => !isGestito(c)).length;
+    const coorte = contratti().filter(c => ymOf(c.fine_servizio) === m);
+    const nonRinnovati = coorte.filter(c => !rinnovato(c)).length;
+    // il mese è definitivo solo quando anche il contratto finito l'ultimo giorno
+    // ha esaurito la tolleranza: prima di allora un rinnovo può ancora arrivare
+    // e il churn può solo scendere. Calcolato, non "gli ultimi due mesi": la
+    // finestra si chiude contratto per contratto.
+    const provvisorio = piuGiorni(fineMese(m), GRAZIA_RINNOVO) > dstr(todayRome());
     return { mese: m, rinnovi: rin.length, persi, valore: val, cash,
-             scaduti: coorte.length, persiCoorte,
+             scaduti: coorte.length, nonRinnovati, provvisorio,
              tasso: pct(rin.length, rin.length + persi),
-             churn: pct(persiCoorte, coorte.length) };
+             churn: pct(nonRinnovati, coorte.length) };
   });
   return { months, righe: out, gestiti };
 }
@@ -1457,8 +1488,8 @@ function renderDelivery() {
   // ratio dai TOTALI del periodo, non media delle percentuali per riga: un mese
   // con 10 scadenze non deve pesare quanto uno con 49.
   const scadTot = ultimi.reduce((a, r) => a + r.scaduti, 0);
-  const persiCoorteTot = ultimi.reduce((a, r) => a + r.persiCoorte, 0);
-  const churn12 = pct(persiCoorteTot, scadTot);
+  const nonRinnTot = ultimi.reduce((a, r) => a + r.nonRinnovati, 0);
+  const churn12 = pct(nonRinnTot, scadTot);
   // I due KPI in cima guardano solo gli ULTIMI 4 MESI: su 12 pesano ancora
   // stagioni vecchie e il numero si muove con mesi di ritardo. La tabella qui
   // sotto resta a 12 mesi con il suo totale, per il confronto storico.
@@ -1467,8 +1498,8 @@ function renderDelivery() {
   const rinRec = recenti.reduce((a, r) => a + r.rinnovi, 0);
   const persiRec = recenti.reduce((a, r) => a + r.persi, 0);
   const scadRec = recenti.reduce((a, r) => a + r.scaduti, 0);
-  const persiCoorteRec = recenti.reduce((a, r) => a + r.persiCoorte, 0);
-  const churn4 = pct(persiCoorteRec, scadRec);
+  const nonRinnRec = recenti.reduce((a, r) => a + r.nonRinnovati, 0);
+  const churn4 = pct(nonRinnRec, scadRec);
 
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnDelKpi"></div>
@@ -1509,14 +1540,17 @@ function renderDelivery() {
 
     <div class="card">
       <h2>Rinnovi e churn, mese per mese</h2>
-      <div class="subtitle"><strong>Churn</strong> = dei clienti a cui il servizio finiva in quel mese
-        ("in scadenza"), quanti oggi risultano persi. Stesso gruppo di clienti sopra e sotto la riga di frazione.
-        ⚠️ Il verdetto matura: un cliente viene segnato perso in media <strong>4 mesi dopo</strong> la fine
-        servizio, quindi gli ultimi mesi sono ancora in sospeso e il loro churn salirà.
+      <div class="subtitle"><strong>Churn</strong> = dei contratti che finivano in quel mese, quanti NON hanno
+        un contratto successivo per lo stesso centro firmato entro la scadenza + ${GRAZIA_RINNOVO} giorni.
+        La tolleranza serve perché il rinnovo si mette per iscritto in media 30 giorni dopo la fine del servizio:
+        senza, conteremmo come persi anche quelli che hanno solo firmato in ritardo. Vale come rinnovo qualunque
+        contratto successivo, anche senza tag RINNOVO. ⚠️ I mesi marcati <em>provv.</em> hanno ancora contratti
+        dentro i ${GRAZIA_RINNOVO} giorni: un rinnovo può ancora arrivare, quindi quel churn può solo scendere.
+        Quando la finestra si chiude il mese si congela e non si muove più.
         <strong>Tasso di rinnovo</strong> = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese, per data del
         contratto e per DATA CLIENTE PERSO: è un altro conto, non il complemento del churn.</div>
       <div class="table-scroll"><table class="fn-pnl">
-        <thead><tr><th>Mese</th><th>Rinnovi</th><th>Clienti persi</th><th>Tasso di rinnovo</th><th>In scadenza</th><th>Persi a scadenza</th><th>Churn</th><th>Valore rinnovi</th><th>Incassato su rinnovi</th></tr></thead>
+        <thead><tr><th>Mese</th><th>Rinnovi</th><th>Clienti persi</th><th>Tasso di rinnovo</th><th>Contratti in scadenza</th><th>Non rinnovati</th><th>Churn</th><th>Valore rinnovi</th><th>Incassato su rinnovi</th></tr></thead>
         <tbody>
           ${ultimi.map(r => `<tr>
             <td class="name">${ymLabel(r.mese)}</td>
@@ -1524,15 +1558,15 @@ function renderDelivery() {
             <td>${fmt(r.persi)}</td>
             <td>${r.tasso === null ? '—' : `<span class="${r.tasso >= 30 ? 'val-good' : 'val-bad'}">${fmtPct(r.tasso)}</span>`}</td>
             <td>${fmt(r.scaduti)}</td>
-            <td>${fmt(r.persiCoorte)}</td>
-            <td>${r.churn === null ? '—' : `<span class="${r.churn >= 50 ? 'val-bad' : ''}">${fmtPct(r.churn)}</span>`}</td>
+            <td>${fmt(r.nonRinnovati)}</td>
+            <td>${r.churn === null ? '—' : `<span class="${r.churn >= 50 ? 'val-bad' : ''}">${fmtPct(r.churn)}</span>`}${r.provvisorio ? ' <span style="color:var(--muted);font-size:.85em">provv.</span>' : ''}</td>
             <td>${eur(r.valore)}</td>
             <td>${eur(r.cash)}</td></tr>`).join('')}
           <tr class="fn-tot"><td class="name">Totale 12 mesi</td>
             <td>${fmt(rinTot)}</td><td>${fmt(persiTot)}</td>
             <td>${fmtPct(pct(rinTot, rinTot + persiTot))}</td>
             <td>${fmt(scadTot)}</td>
-            <td>${fmt(persiCoorteTot)}</td>
+            <td>${fmt(nonRinnTot)}</td>
             <td>${fmtPct(churn12)}</td>
             <td>${eur(ultimi.reduce((a, r) => a + r.valore, 0))}</td>
             <td>${eur(ultimi.reduce((a, r) => a + r.cash, 0))}</td></tr>
@@ -1555,12 +1589,12 @@ function renderDelivery() {
     { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti)), sub: 'solo team delivery' },
     { label: 'Tasso di rinnovo 4 mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
       sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti' },
-    // ⚠️ sui 4 mesi il churn è per forza sottostimato: il tag "cliente perso"
-    // arriva in media 4 mesi dopo la fine servizio. Il sub lo dice, altrimenti
-    // un churn basso qui sopra si legge come un miglioramento che non c'è.
+    // gli ultimi due mesi della finestra non hanno ancora finito i 60 giorni di
+    // tolleranza: il sub porta il 12 mesi accanto, così non si legge un churn
+    // basso come un miglioramento che non c'è.
     { label: 'Churn 4 mesi', value: fmtPct(churn4),
-      sub: persiCoorteRec + ' persi su ' + fmt(scadRec) + ' scadenze · ancora in maturazione'
-        + (churn12 === null ? '' : ', su 12 mesi è ' + fmtPct(churn12)) },
+      sub: nonRinnRec + ' non rinnovati su ' + fmt(scadRec) + ' contratti scaduti'
+        + (churn12 === null ? '' : ' · su 12 mesi è ' + fmtPct(churn12)) },
   ]);
 
   RUOLI_CAP.forEach(R => {

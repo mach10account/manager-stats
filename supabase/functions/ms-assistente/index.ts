@@ -67,7 +67,7 @@ const REGOLE_DATI = `CONVENZIONI DI CALCOLO — sbagliarle produce numeri falsi:
 - Coorte = mese di CREAZIONE del lead (mese_coorte).
 - I contratti si leggono da v_notion_contratti, mai da fin_contratti.
 - Nel P&L i mesi chiusi vengono dal foglio (fin_pnl); il mese in corso e' parziale.
-- Churn di un mese = dei clienti con FINE SERVIZIO in quel mese, quanti risultano oggi persi (stato_attivita contiene 'CLIENTE PERSO/SPARITO'). NON e' "persi del mese / clienti in gestione". Il verdetto matura: il tag arriva in media 4 mesi dopo la fine servizio, quindi il churn degli ultimi mesi e' sottostimato e va detto.
+- Churn di un mese = dei contratti (v_notion_contratti) con fine_servizio in quel mese, quanti NON hanno un contratto successivo per lo stesso nome_centro creato entro fine_servizio + 60 giorni. NON e' "persi del mese / clienti in gestione" e non si calcola su centri.fine_servizio, che al rinnovo non viene aggiornata. Gli ultimi 2 mesi sono provvisori (la tolleranza non e' ancora scaduta) e va detto.
 - "Clienti persi nel mese" (tile Sauron) = DATA CLIENTE PERSO in quel mese: e' la data in cui li abbiamo SEGNATI persi, non quella in cui se ne sono andati. Meta' dei persi non ha quella data compilata.`;
 
 function json(body: unknown, status = 200) {
