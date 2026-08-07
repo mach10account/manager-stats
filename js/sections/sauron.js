@@ -301,9 +301,9 @@ function foglioPnl(m) {
     costiTot: t.diretti + t.operativi + t.strutturali + t.rimborsi };
 }
 
-// conto economico per cassa del mese.
-// forza = 'calcolato' → ignora il foglio anche dove c'e' (chip nel tab P&L).
-function pnl(m, forza) {
+// conto economico per cassa del mese: ricavi Notion, costi dal foglio dove il
+// mese ci sta (altrimenti registro). Nessuna vista alternativa.
+function pnl(m) {
   const s = splitIncassato(m);
   const cm = costiMese(m);
   const ricaviNetti = s.tot - cm.rimborsi;
@@ -317,7 +317,7 @@ function pnl(m, forza) {
     ebitda, capex: cm.capex, cashFlow: ebitda - cm.capex, costiTot: cm.tot,
   };
   const fg = foglioPnl(m);
-  const daFoglio = !!fg && forza !== 'calcolato';
+  const daFoglio = !!fg;
   const b = daFoglio ? fg : calcolato;
   const rn = b.ricaviNetti;
   return {
@@ -842,13 +842,13 @@ function apriFormCosto(c, repartoDefault) {
 
 // ── tab P&L (conto economico per cassa) ──────────────────────────────────────
 // Due viste della stessa scala:
-//  · FOGLIO — il conto economico dichiarato in "PL Database Input", voce per voce
-//    come lo scrive Leo. E' il dato ufficiale dei mesi chiusi.
-//  · CALCOLATO — ricavi da fin_incassi (Notion) e costi da fin_costi. E' l'unico
-//    possibile sul mese in corso, ma sui mesi chiusi vale poco: il registro costi
-//    non ha storico (tutte voci mensili dal 2026-01-01) e non conosce l'ad spend.
-// In automatico vince il foglio dove c'e'; i chip permettono di forzare l'altra.
-let PNL_VISTA = null;
+// UNA vista sola (Leo, 7/8 — niente doppie versioni):
+//  · RICAVI — sempre da fin_incassi (Notion), le rate davvero incassate nel mese.
+//  · COSTI — dal foglio "PL Database Input" nei mesi che ci stanno (il dato
+//    ufficiale); dal registro costi solo sul mese in corso, dove il foglio non
+//    ha ancora la colonna. Il registro sui mesi chiusi vale poco (niente storico,
+//    niente ad spend) e infatti non si può più scegliere: resta solo nel pannello
+//    "Foglio e app a confronto", come diagnostica.
 
 // quanto pesa la voce `voce` nel mese x (null = riga assente = casella vuota)
 const importoVoce = (x, voce) => {
@@ -864,9 +864,8 @@ const RE_PERSONALE = /^(Personale:|Commissioni |Bonus pagati)/i;
 const RE_MARKETING = /^(Ad spend|Costo team marketing|Marketing brand)/i;
 
 function renderPnl() {
-  const forza = PNL_VISTA === 'calcolato' ? 'calcolato' : undefined;
-  const d = pnl(MESE, forza);
-  const p = pnl(addYm(MESE, -1), forza);
+  const d = pnl(MESE);
+  const p = pnl(addYm(MESE, -1));
   const rn = d.ricaviNetti;
   const foglio = d.fonte === 'foglio';
 
@@ -944,19 +943,15 @@ function renderPnl() {
 
     <div class="card">
       <h2>Conto economico (per cassa) — ${ymLabel(MESE)}</h2>
-      <div class="lead-tabs" id="fnPnlFonte">
-        <button data-v="foglio">Costi dal foglio P&L</button>
-        <button data-v="calcolato">Costi dal registro (app)</button>
-      </div>
       <div class="subtitle">${foglio
         ? `<strong>Ricavi da Notion</strong> — le rate davvero incassate nel mese — e <strong>costi
            dichiarati</strong> sul foglio "PL Database Input", voce per voce come stanno lì.
            Sui mesi chiusi i costi veri sono quelli: il registro dell'app non ha storico
            (nessuna riga per l'ad spend, la parte fissa dei setter, i compensi amministratori)
            e da solo darebbe un margine gonfiato. Il cash dichiarato sul foglio è nel confronto in fondo.`
-        : `Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato); costi dal registro.
-           ${d.fg ? 'Vista forzata: per questo mese <strong>esistono</strong> anche i costi del foglio.'
-                  : 'Per questo mese <strong>non c\'è ancora</strong> una colonna sul foglio P&L.'}`}
+        : `Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato). Costi dal
+           registro dell'app: per questo mese <strong>non c'è ancora</strong> una colonna sul foglio P&L —
+           quando la compili, i costi passeranno da soli a quelli del foglio.`}
         La colonna <strong>% ricavi</strong> è sull'incassato netto; il <strong>Δ</strong> confronta col mese
         precedente (verde = va nella direzione giusta, anche quando è un costo che scende).</div>
       <div class="table-scroll"><table class="fn-pnl">
@@ -1048,11 +1043,6 @@ function renderPnl() {
           <div class="esito-track"><div class="esito-fill" style="width:${Math.max(2, Math.round(100 * x.importo / maxCosto))}%;background:var(--series-1)"></div></div>
         </div>`).join('') : '<div class="status">Nessun costo nel mese.</div>'}
     </div>`;
-
-  _mount.querySelectorAll('#fnPnlFonte button').forEach(b => {
-    b.classList.toggle('active', b.dataset.v === d.fonte);
-    b.onclick = () => { PNL_VISTA = b.dataset.v; renderPnl(); };
-  });
 
   renderKpiRow(_mount.querySelector('#fnPnlKpi'), [
     { label: 'Fatturato contrattualizzato', value: eur(d.contrattualizzato), sub: 'valore dei contratti firmati nel mese (Notion)' },
