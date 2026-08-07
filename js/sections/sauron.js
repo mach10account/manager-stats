@@ -549,11 +549,11 @@ function tileDelivery() {
       sub: ch4.nonRinnovati + ' non rinnovati su ' + fmt(ch4.scaduti) + ' contratti scaduti'
         + (ch12.quota === null ? '' : ' · su 12 mesi è ' + fmtPct(ch12.quota)),
       info: 'dei contratti arrivati a fine servizio negli ultimi ' + MESI_KPI + ' mesi, quanti NON hanno '
-        + 'un contratto successivo per lo stesso centro firmato entro la scadenza + ' + GRAZIA_RINNOVO
-        + ' giorni. La tolleranza c\'è perché il rinnovo si mette per iscritto in media 30 giorni DOPO '
-        + 'la fine del servizio. Su 12 mesi è ' + fmtPct(ch12.quota) + '. I mesi ancora dentro i '
-        + GRAZIA_RINNOVO + ' giorni sono provvisori e possono solo scendere: il dettaglio mese per mese, '
-        + 'con i mesi ancora aperti marcati, è nella tabella rinnovi e churn della tab Delivery.' },
+        + 'mai avuto un contratto successivo per lo stesso centro. Senza limiti di tempo: se il cliente '
+        + 'rifirma sei mesi dopo, il churn del mese in cui era scaduto scende. Su 12 mesi è '
+        + fmtPct(ch12.quota) + '. Gli ultimi mesi sono i più alti perché quasi nessun rinnovo è ancora '
+        + 'stato firmato (arriva in media 30 giorni dopo la fine servizio): nella tabella della tab '
+        + 'Delivery sono marcati, e possono solo scendere.' },
   };
 }
 
@@ -1467,17 +1467,22 @@ async function salvaCapacita(ruolo, persona_id, valore) {
 }
 
 // ⚠️ CHURN = coorte di CONTRATTI IN SCADENZA: dei contratti che finivano in quel
-// mese, quanti NON hanno un contratto successivo per lo stesso centro firmato
-// entro la fine + GRAZIA_RINNOVO giorni.
+// mese, quanti NON hanno MAI avuto un contratto successivo per lo stesso centro.
+// Nessun limite di tempo: se il cliente rifirma sei mesi dopo, il churn del mese
+// in cui era scaduto scende. È la scelta di Leo (7/8) e la regola giusta — un
+// cliente che torna non l'abbiamo perso, e quando torna non è affar nostro.
+// Conseguenza da tenere presente: un mese passato può ancora migliorare, quindi
+// i numeri non si congelano mai del tutto. Vale come rinnovo QUALUNQUE contratto
+// successivo, anche senza tag RINNOVO (col solo tag il churn sarebbe 89,4%
+// invece di 82,6%): se il cliente firma di nuovo non l'abbiamo perso, comunque
+// sia etichettata la riga.
 // Perché sui contratti e non sui clienti: la data di fine e quella di creazione
 // stanno sulla stessa riga e non possono divergere. Su `centri` invece FINE
 // SERVIZIO al rinnovo NON viene aggiornata in 3 casi su 4, e l'aggancio dei
 // rinnovi per nome perde il 19% dei contratti (nomi che in anagrafica non ci sono).
-// Perché la tolleranza: un rinnovo nasce in media 30 giorni DOPO la fine del
-// servizio precedente — è la firma che arriva tardi, non il cliente che se ne va.
-// Senza tolleranza il churn misurerebbe la burocrazia (92,6% invece di 84,7%).
-// Vale come rinnovo QUALUNQUE contratto successivo, anche senza tag RINNOVO: se
-// il cliente firma di nuovo non l'abbiamo perso, comunque sia etichettata la riga.
+// GRAZIA_RINNOVO non entra più nel conto: resta solo per marcare i mesi "caldi",
+// quelli in cui la gran parte dei rinnovi non è ancora stata firmata (la firma
+// arriva in media 30 giorni dopo la fine del servizio).
 const GRAZIA_RINNOVO = 60;
 const MESI_KPI = 4;                           // finestra corta dei KPI in cima (la tabella resta a 12)
 const piuGiorni = (iso, n) => {
@@ -1510,9 +1515,8 @@ function rinnoviChurn() {
     dateCentro.get(k).push(c.creazione_contratto);
   }
   const rinnovato = c => {
-    const limite = piuGiorni(c.fine_servizio, GRAZIA_RINNOVO);
     const date = dateCentro.get(chiave(c.nome_centro)) || [];
-    return date.some(d => d > c.creazione_contratto && d <= limite);
+    return date.some(d => d > c.creazione_contratto);
   };
   const out = months.map(m => {
     const rin = contratti().filter(c => hasTag(c.stato, 'RINNOVO') && ymOf(c.creazione_contratto) === m);
@@ -1522,10 +1526,11 @@ function rinnoviChurn() {
       .reduce((a, r) => a + (+r.importo || 0), 0);
     const coorte = contratti().filter(c => ymOf(c.fine_servizio) === m);
     const nonRinnovati = coorte.filter(c => !rinnovato(c)).length;
-    // il mese è definitivo solo quando anche il contratto finito l'ultimo giorno
-    // ha esaurito la tolleranza: prima di allora un rinnovo può ancora arrivare
-    // e il churn può solo scendere. Calcolato, non "gli ultimi due mesi": la
-    // finestra si chiude contratto per contratto.
+    // "caldo": è passato meno di GRAZIA_RINNOVO dall'ultimo contratto scaduto del
+    // mese, quindi la gran parte dei rinnovi non è ancora stata firmata (arrivano
+    // in media 30 giorni dopo la fine servizio). Un mese può migliorare anche
+    // dopo — senza limite di tempo nessun mese è mai chiuso del tutto — ma qui
+    // succede quasi tutto, e senza avviso quei mesi sembrerebbero un disastro.
     const provvisorio = piuGiorni(fineMese(m), GRAZIA_RINNOVO) > dstr(todayRome());
     return { mese: m, rinnovi: rin.length, persi, valore: val, cash,
              scaduti: coorte.length, nonRinnovati, provvisorio,
@@ -1559,7 +1564,7 @@ function renderChurnTrend(righe) {
       <div class="t-row"><span>Non rinnovati</span><b>${fmt(r.nonRinnovati)}</b></div>
       <div class="t-row"><span>Tasso di rinnovo</span><b>${r.tasso === null ? '—' : fmtPct(r.tasso)}</b></div>
       <div class="t-row"><span>Rinnovi · persi</span><b>${fmt(r.rinnovi)} · ${fmt(r.persi)}</b></div>
-      ${r.provvisorio ? '<div class="t-row"><span>Finestra ancora aperta</span><b>il churn può solo scendere</b></div>' : ''}`,
+      ${r.provvisorio ? '<div class="t-row"><span>Rinnovi ancora da firmare</span><b>il churn può solo scendere</b></div>' : ''}`,
   });
 }
 
@@ -1634,12 +1639,12 @@ function renderDelivery() {
     <div class="card">
       <h2>Rinnovi e churn, mese per mese</h2>
       <div class="subtitle"><strong>Churn</strong> = dei contratti che finivano in quel mese, quanti NON hanno
-        un contratto successivo per lo stesso centro firmato entro la scadenza + ${GRAZIA_RINNOVO} giorni.
-        La tolleranza serve perché il rinnovo si mette per iscritto in media 30 giorni dopo la fine del servizio:
-        senza, conteremmo come persi anche quelli che hanno solo firmato in ritardo. Vale come rinnovo qualunque
-        contratto successivo, anche senza tag RINNOVO. ⚠️ I mesi marcati <em>provv.</em> hanno ancora contratti
-        dentro i ${GRAZIA_RINNOVO} giorni: un rinnovo può ancora arrivare, quindi quel churn può solo scendere.
-        Quando la finestra si chiude il mese si congela e non si muove più.
+        mai avuto un contratto successivo per lo stesso centro. Nessun limite di tempo: se il cliente rifirma
+        sei mesi dopo, il churn del mese in cui era scaduto scende — un cliente che torna non l'abbiamo perso.
+        Vale come rinnovo qualunque contratto successivo, anche senza tag RINNOVO. ⚠️ Ogni mese può ancora
+        migliorare, ma quelli marcati <em>provv.</em> molto di più: sono scaduti da meno di ${GRAZIA_RINNOVO}
+        giorni e la firma del rinnovo arriva in media 30 giorni dopo la fine del servizio, quindi lì i rinnovi
+        in gran parte devono ancora arrivare.
         <strong>Tasso di rinnovo</strong> = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese, per data del
         contratto e per DATA CLIENTE PERSO: è un altro conto, non il complemento del churn.</div>
       <div class="legend">
