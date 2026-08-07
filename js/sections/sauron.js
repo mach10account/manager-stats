@@ -467,16 +467,6 @@ function renderKPI() {
       { label: 'Clienti persi', value: fmt(persiMese), tone: persiMese > 0 ? 'bad' : 'good',
         info: 'segnati persi su Notion nel mese, per DATA CLIENTE PERSO: è quando li abbiamo '
           + 'segnati, non quando se ne sono andati (in media 4 mesi dopo la fine servizio)' },
-      { label: 'Churn ' + MESI_KPI + ' mesi', value: fmtPct(ch4.quota),
-        tone: ch4.quota === null ? undefined : (ch4.quota >= 50 ? 'bad' : undefined),
-        info: ch4.nonRinnovati + ' contratti su ' + fmt(ch4.scaduti) + ' arrivati a scadenza negli ultimi '
-          + MESI_KPI + ' mesi non hanno avuto un contratto successivo entro ' + GRAZIA_RINNOVO
-          + ' giorni dalla fine. Su 12 mesi è ' + fmtPct(ch12.quota) + '. I mesi ancora dentro i '
-          + GRAZIA_RINNOVO + ' giorni possono solo scendere: il dettaglio mese per mese è in Delivery.' },
-      { label: 'Tasso di rinnovo ' + MESI_KPI + ' mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
-        info: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti negli ultimi ' + MESI_KPI
-          + ' mesi (rinnovi firmati + clienti segnati persi). Conto diverso dal churn: '
-          + 'non è il suo complemento.' },
       { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), info: 'valore medio dei contratti nuovi' },
       { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
         info: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
@@ -493,16 +483,7 @@ function renderKPI() {
       tileRiemp(RUOLI_CAP[0]),
       tileRiemp(RUOLI_CAP[1]),
       tileRiemp(RUOLI_CAP[2]),
-      { label: 'Clienti in gestione', value: fmt(gestiti.length),
-        info: 'tutti gli stati tranne CLIENTE PERSO/SPARITO · ' + nPM + ' project manager attivi' },
-      { label: 'Media per PM', value: fmt1(safeDiv(gestiti.length, nPM)),
-        info: 'clienti in gestione ÷ project manager. Comprende i ' + fmt(gestiti.filter(x => !x.consulente).length)
-          + ' senza consulente e i clienti parcheggiati: il carico vero, sul portafoglio operativo, '
-          + 'è nella tab Delivery · posti PM impostati: ' + fmt(riempR.PM.posti) },
-      { label: 'Costo team delivery', value: eur(costoTeam),
-        info: teamDel.length + ' persone/voci nel registro costi con reparto Delivery, commissioni escluse' },
-      { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti.length)),
-        info: 'costo del team delivery ÷ clienti in gestione' },
+      { label: 'Aziende gestite', value: fmt(gestiti.length), info: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
       { label: 'Costi del mese', value: eur(p.costiTot),
         info: p.fonte === 'foglio'
           ? 'diretti ' + eur(p.costiDiretti) + ' + operativi ' + eur(p.operativi)
@@ -520,6 +501,23 @@ function renderKPI() {
         info: 'margine netto ÷ costi del mese' },
     ] },
   ], { righe: true });
+
+  // sotto ai blocchi: il team che consegna il servizio e come tiene i clienti.
+  // Restano quadratini a sé e non righe dentro Commerciale/Azienda — sono numeri
+  // sul portafoglio e sul team, non sul mese selezionato come tutto il resto.
+  renderKpiRow(_mount.querySelector('#fnDelKpi'), [
+    { label: 'Clienti in gestione', value: fmt(gestiti.length), sub: nPM + ' project manager attivi' },
+    { label: 'Media per PM', value: fmt1(safeDiv(gestiti.length, nPM)),
+      sub: 'posti PM impostati: ' + fmt(riempR.PM.posti) },
+    { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese' },
+    { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti.length)), sub: 'solo team delivery' },
+    { label: 'Tasso di rinnovo ' + MESI_KPI + ' mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
+      sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti' },
+    { label: 'Churn ' + MESI_KPI + ' mesi', value: fmtPct(ch4.quota),
+      tone: ch4.quota === null ? undefined : (ch4.quota >= 50 ? 'bad' : undefined),
+      sub: ch4.nonRinnovati + ' non rinnovati su ' + fmt(ch4.scaduti) + ' contratti scaduti'
+        + (ch12.quota === null ? '' : ' · su 12 mesi è ' + fmtPct(ch12.quota)) },
+  ]);
 }
 
 // ── trend mensile ────────────────────────────────────────────────────────────
@@ -570,6 +568,8 @@ const giorniRitardo = iso => Math.floor((todayRome() - new Date(iso + 'T00:00:00
 // ── tab Dashboard ────────────────────────────────────────────────────────────
 const DASH_HTML = `
   <div class="kpi-groups kpi-auto" id="fnKpi"></div>
+
+  <div class="kpi-row" id="fnDelKpi"></div>
 
   <div class="card">
     <h2>Andamento mensile</h2>
