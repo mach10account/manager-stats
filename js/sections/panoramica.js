@@ -1,6 +1,6 @@
 // manager-stats · Sezione Panoramica — KPI azienda + tabella per-centro
 import { supabase } from '../supabase.js';
-import { fetchAll, loadCentri, centriMap } from '../data.js';
+import { loadCentri, centriMap } from '../data.js';
 import { getFilters } from '../filters.js';
 import { navigate } from '../router.js';
 // ?v= su tables.js: labelConInfo è un export NUOVO. Senza, un browser con
@@ -100,20 +100,13 @@ function deriveRatios(r) {
   return r;
 }
 
-function aggregate(daily) {
-  const m = new Map();
-  const NUM = ['spesa', 'impression', 'lead_fb', 'lead_reali', 'risposte', 'appuntamenti', 'presenze', 'non_presentati', 'pacchetti', 'ricavo', 'potenziale'];
-  for (const row of daily) {
-    const id = row.centro_id || '__none__';
-    let a = m.get(id);
-    if (!a) {
-      a = { centro_id: row.centro_id || null, centro: row.centro || '(senza centro)', consulente: row.consulente || null };
-      for (const k of NUM) a[k] = 0;
-      m.set(id, a);
-    }
-    for (const k of NUM) a[k] += (+row[k] || 0);
-  }
-  return [...m.values()].map(deriveRatios);
+// Le righe arrivano dalla RPC già aggregate per centro sul periodo: qui restano
+// solo la coercizione a numero e la riga "(senza centro)" per i lead orfani.
+const NUM = ['spesa', 'impression', 'lead_fb', 'lead_reali', 'risposte', 'appuntamenti', 'presenze', 'non_presentati', 'pacchetti', 'ricavo', 'potenziale'];
+function normalizza(r) {
+  const a = { centro_id: r.centro_id || null, centro: r.centro || '(senza centro)', consulente: r.consulente || null };
+  for (const k of NUM) a[k] = (+r[k] || 0);
+  return deriveRatios(a);
 }
 
 function draw(mount) {
@@ -178,13 +171,14 @@ export async function render(mount, params) {
 
   mount.querySelector('#pnSearch').oninput = e => { search = e.target.value.toLowerCase(); draw(mount); };
 
-  const daily = await fetchAll((lo, hi) =>
-    supabase.from('v_panoramica_centro')
-      .select('centro_id,giorno,centro,consulente,spesa,impression,lead_fb,lead_reali,risposte,appuntamenti,presenze,non_presentati,pacchetti,ricavo,potenziale')
-      .gte('giorno', f.from).lte('giorno', f.to)
-      .range(lo, hi));
+  // UNA chiamata aggregata (RPC sopra v_panoramica_centro) al posto della
+  // paginazione per giorno: ogni pagina di fetchAll ricalcolava l'intera vista
+  // e sotto carico sforava statement_timeout (57014). L'aggregato per centro
+  // lo facevamo comunque qui in JS: ora lo fa il DB, in un giro solo.
+  const { data, error } = await supabase.rpc('api_panoramica_centro', { p_from: f.from, p_to: f.to });
+  if (error) throw error;
 
-  let rows = aggregate(daily);
+  let rows = (data || []).map(normalizza);
   if (f.consulente) rows = rows.filter(r => r.consulente === f.consulente);
   // il media buyer non e' nella vista: si passa dall'anagrafica centri
   if (f.mediaBuyer) {

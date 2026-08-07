@@ -83,7 +83,7 @@ Scrive invece **l'app** (PostgREST diretto sotto RLS): `fin_costi`, `fin_capacit
 - `isAuthError` (supabase.js): `permission denied` NON è sessione scaduta.
 - Formattazione numeri: `useGrouping:'always'` (in italiano il separatore parte da 5 cifre).
 - `renderLineChart` (charts.js): `minY = Math.min(0, …)` per le serie negative (il mese in corso parte sottozero).
-- Performance: `fetchAll` pagina da 1000 e `v_panoramica_centro` costa ~1,3s/pagina; l'istanza satura a ondate quando i sync si accavallano con gli utenti — un 500 con codice `57014` (statement timeout) di solito NON è un bug della query nuova.
+- Performance: `fetchAll` pagina da 1000 e ogni pagina di una vista pesante ricalcola la vista DA ZERO — per gli aggregati usare una RPC `api_*` che aggrega nel DB in una chiamata sola (la Panoramica usa `api_panoramica_centro`, migration 52-53: l'aggregato 30gg è passato da 11s a ~4,5s). L'istanza satura comunque a ondate quando i sync si accavallano con gli utenti — un 500 con codice `57014` (statement timeout, per `authenticated` = 15s) di solito NON è un bug della query nuova; il catch di `renderCurrent` (app.js) lo traduce in un messaggio con Riprova.
 - Debito noto: `boot()` non è idempotente al rilogin nella stessa tab (listener doppi).
 
 ## 🚨 Repo PUBBLICO — cosa non deve entrare

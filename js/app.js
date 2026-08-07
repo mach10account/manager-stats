@@ -9,7 +9,7 @@ import { esc } from './format.js';
 import { initAssistente, resetAssistente } from './assistente.js?v=2';   // ?v da bumpare quando cambia assistente.js
 import * as idle from './idle.js?v=1';   // ?v da bumpare quando cambia idle.js
 
-import * as panoramica from './sections/panoramica.js?v=bench2';   // ?v da bumpare quando cambia panoramica.js
+import * as panoramica from './sections/panoramica.js?v=rpc1';   // ?v da bumpare quando cambia panoramica.js
 import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';
@@ -201,7 +201,14 @@ function renderCurrent() {
     .then(() => sections[path].render(mount, route.params))
     .catch(err => {
       if (isAuthError(err)) { showLogin(); return; }
-      mount.innerHTML = `<div class="status">Errore: ${esc(err && err.message ? err.message : err)}</div>`;
+      // 57014 = statement timeout: l'istanza satura a ondate quando i sync si
+      // accavallano agli utenti — non è un guasto, si riprova tra un momento.
+      const msg = err && err.code === '57014'
+        ? 'Il database è momentaneamente sovraccarico. Aspetta qualche secondo e riprova.'
+        : 'Errore: ' + (err && err.message ? err.message : err);
+      // CSP senza unsafe-inline: niente onclick, solo addEventListener
+      mount.innerHTML = `<div class="status">${esc(msg)} <button type="button" id="btnRiprova">Riprova</button></div>`;
+      mount.querySelector('#btnRiprova').addEventListener('click', () => renderCurrent());
       console.error(err);
     });
 }
