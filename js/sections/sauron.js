@@ -1535,7 +1535,12 @@ function rinnoviChurn() {
   return { months, righe: out, gestiti };
 }
 
-// churn e tasso di rinnovo sui 12 mesi. Le due linee NON sono complementari: il
+// il grafico parte da GENNAIO dell'anno del mese selezionato: è l'anno in corso,
+// non una finestra mobile. La tabella qui sotto resta a 12 mesi, per il
+// confronto con la stessa stagione dell'anno prima.
+const daGennaio = righe => righe.filter(r => r.mese >= MESE.slice(0, 4) + '-01');
+
+// churn e tasso di rinnovo dell'anno. Le due linee NON sono complementari: il
 // churn guarda i contratti arrivati a scadenza, il tasso di rinnovo i contratti
 // firmati contro i clienti segnati persi. Stanno insieme perché è il confronto
 // che si fa a occhio ogni volta, non perché sommino a 100.
@@ -1640,7 +1645,7 @@ function renderDelivery() {
       <div class="legend">
         <span class="key"><span class="swatch" style="background:var(--series-3)"></span>Churn</span>
         <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Tasso di rinnovo</span>
-        <span class="key" style="color:var(--muted)">gli ultimi mesi sono ancora provvisori</span>
+        <span class="key" style="color:var(--muted)">da gennaio ${MESE.slice(0, 4)} · gli ultimi mesi sono ancora provvisori</span>
       </div>
       <div class="chart-wrap"><svg id="fnChurnTrend" width="100%" height="240"></svg></div>
       <div class="table-scroll"><table class="fn-pnl">
@@ -1680,7 +1685,7 @@ function renderDelivery() {
   const T = tileDelivery();
   renderKpiRow(_mount.querySelector('#fnDelKpi'),
     [T.clienti, T.mediaPM, T.costoTeam, T.costoCliente, T.rinnovo, T.churn]);
-  renderChurnTrend(ultimi);
+  renderChurnTrend(daGennaio(ultimi));
 
   RUOLI_CAP.forEach(R => {
     const el = _mount.querySelector('#fnRuolo' + R.key);
@@ -2092,5 +2097,5 @@ export function onResize() {
   if (!DATA || !_mount) return;
   if (_mount.querySelector('#fnTrend')) renderTrend();
   if (_mount.querySelector('#mkTrend')) renderMktTrend();
-  if (_mount.querySelector('#fnChurnTrend')) renderChurnTrend(rinnoviChurn().righe.slice(-12));
+  if (_mount.querySelector('#fnChurnTrend')) renderChurnTrend(daGennaio(rinnoviChurn().righe.slice(-12)));
 }
