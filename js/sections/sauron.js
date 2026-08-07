@@ -429,15 +429,20 @@ function renderKPI() {
       { label: 'Incassato del mese', value: eur(s.tot), hero: true, info: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
       { label: 'Nuovi clienti — 1ª rata pagata', value: eur(s.nuovi),
         info: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente partito' : ' clienti partiti') + ' nel mese · esclusi rinnovi e upsell' },
-      { label: 'Rate', value: eur(s.rate), info: 'rate successive di clienti attivi' },
-      { label: 'Rinnovi', value: eur(s.rinnovi), info: 'tag RINNOVO sul contratto' },
-      { label: 'Upsell', value: eur(s.upsell) },
+      { label: 'Rate', value: eur(s.rate), info: 'rate incassate nel mese con numero rata diverso da 1, '
+        + 'su contratti senza tag RINNOVO o UPSELL: la cassa ricorrente dei clienti già partiti' },
+      { label: 'Rinnovi', value: eur(s.rinnovi), info: 'rate incassate nel mese su contratti col tag RINNOVO, '
+        + 'qualunque sia il numero di rata' },
+      { label: 'Upsell', value: eur(s.upsell), info: 'rate incassate nel mese su contratti col tag UPSELL '
+        + '(e senza tag RINNOVO, che ha la precedenza)' },
     ] },
     { step: 2, title: 'Contrattualizzato', tiles: [
       { label: 'Contrattualizzato del mese', value: eur(c.tot), hero: true, info: delta(c.tot, cPrev.tot) || 'valore dei contratti creati nel mese' },
       { label: 'Contratti firmati', value: fmt(c.n), info: c.nuovi + ' nuovi · ' + c.rinnovi + ' rinnovi · ' + c.upsell + ' upsell' },
-      { label: 'Ticket medio', value: eur(safeDiv(c.tot, c.n)) },
-      { label: 'Valore rinnovi', value: eur(c.rinnoviVal) },
+      { label: 'Ticket medio', value: eur(safeDiv(c.tot, c.n)),
+        info: 'contrattualizzato del mese ÷ contratti firmati nel mese, rinnovi e upsell compresi' },
+      { label: 'Valore rinnovi', value: eur(c.rinnoviVal),
+        info: 'somma del valore dei contratti col tag RINNOVO creati nel mese' },
     ] },
     { step: 3, title: 'Da incassare', tiles: [
       { label: 'Rate da incassare nel mese', value: eur(sc.daIncassare), hero: true,
@@ -463,7 +468,9 @@ function renderKPI() {
     { step: 4, title: 'Commerciale', tiles: [
       { label: 'Nuovi clienti', value: fmt(c.nuovi), hero: true, info: 'contratti nuovi creati nel mese' },
       { label: 'Clienti rinnovati', value: fmt(c.rinnovi), info: 'contratti di rinnovo creati nel mese' },
-      { label: 'Upsell effettuati', value: fmt(c.upsell) },
+      { label: 'Upsell effettuati', value: fmt(c.upsell),
+        info: 'contratti col tag UPSELL creati nel mese. Il tag RINNOVO ha la precedenza: '
+          + 'un contratto marcato in entrambi i modi conta come rinnovo' },
       { label: 'Clienti persi', value: fmt(persiMese), tone: persiMese > 0 ? 'bad' : 'good',
         info: 'segnati persi su Notion nel mese, per DATA CLIENTE PERSO: è quando li abbiamo '
           + 'segnati, non quando se ne sono andati (in media 4 mesi dopo la fine servizio)' },
@@ -505,18 +512,39 @@ function renderKPI() {
   // sotto ai blocchi: il team che consegna il servizio e come tiene i clienti.
   // Restano quadratini a sé e non righe dentro Commerciale/Azienda — sono numeri
   // sul portafoglio e sul team, non sul mese selezionato come tutto il resto.
+  const senzaPM = gestiti.filter(x => !x.consulente).length;
   renderKpiRow(_mount.querySelector('#fnDelKpi'), [
-    { label: 'Clienti in gestione', value: fmt(gestiti.length), sub: nPM + ' project manager attivi' },
+    { label: 'Clienti in gestione', value: fmt(gestiti.length), sub: nPM + ' project manager attivi',
+      info: "righe dell'anagrafica centri (DATABASE CLIENTI di Notion, rifatta ogni notte) che NON hanno "
+        + "il tag CLIENTE PERSO/SPARITO in STATO ATTIVITÀ. Contano tutti gli altri stati: ads attive, "
+        + 'onboarding, standby, in attesa di rinnovo e anche chi non ha nessuno stato.' },
     { label: 'Media per PM', value: fmt1(safeDiv(gestiti.length, nPM)),
-      sub: 'posti PM impostati: ' + fmt(riempR.PM.posti) },
-    { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese' },
-    { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti.length)), sub: 'solo team delivery' },
+      sub: 'posti PM impostati: ' + fmt(riempR.PM.posti),
+      info: 'clienti in gestione ÷ project manager distinti sul campo CONSULENTE, contati per PERSONA '
+        + '(due email dello stesso PM fanno uno solo, via anagrafica del team). ⚠️ Al numeratore ci sono '
+        + 'anche i ' + fmt(senzaPM) + ' clienti senza consulente e quelli parcheggiati: il carico vero, '
+        + 'sul portafoglio operativo e persona per persona, è nella tab Delivery.' },
+    { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese',
+      info: 'somma delle voci del registro costi (tab Costi) con reparto Delivery attive nel mese '
+        + 'selezionato. Sono i compensi fissi: le commissioni sugli incassi non sono qui, stanno nel P&L.' },
+    { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti.length)), sub: 'solo team delivery',
+      info: 'costo del team delivery ÷ clienti in gestione. Solo il delivery: non ci sono marketing, '
+        + 'commerciale, struttura né commissioni.' },
     { label: 'Tasso di rinnovo ' + MESI_KPI + ' mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
-      sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti' },
+      sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti',
+      info: 'rinnovi ÷ (rinnovi + clienti persi) negli ultimi ' + MESI_KPI + ' mesi. I rinnovi sono i '
+        + 'contratti col tag RINNOVO per data di creazione, i persi vanno per DATA CLIENTE PERSO: sono '
+        + 'due date diverse, quindi NON è il complemento del churn qui accanto.' },
     { label: 'Churn ' + MESI_KPI + ' mesi', value: fmtPct(ch4.quota),
       tone: ch4.quota === null ? undefined : (ch4.quota >= 50 ? 'bad' : undefined),
       sub: ch4.nonRinnovati + ' non rinnovati su ' + fmt(ch4.scaduti) + ' contratti scaduti'
-        + (ch12.quota === null ? '' : ' · su 12 mesi è ' + fmtPct(ch12.quota)) },
+        + (ch12.quota === null ? '' : ' · su 12 mesi è ' + fmtPct(ch12.quota)),
+      info: 'dei contratti arrivati a fine servizio negli ultimi ' + MESI_KPI + ' mesi, quanti NON hanno '
+        + 'un contratto successivo per lo stesso centro firmato entro la scadenza + ' + GRAZIA_RINNOVO
+        + ' giorni. La tolleranza c\'è perché il rinnovo si mette per iscritto in media 30 giorni DOPO '
+        + 'la fine del servizio. Su 12 mesi è ' + fmtPct(ch12.quota) + '. I mesi ancora dentro i '
+        + GRAZIA_RINNOVO + ' giorni sono provvisori e possono solo scendere: il dettaglio mese per mese, '
+        + 'con i mesi ancora aperti marcati, è nella tab Delivery.' },
   ]);
 }
 

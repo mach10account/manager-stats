@@ -361,6 +361,14 @@ header::before { /* alone di luce in alto a sinistra */
 .kg-i:hover::after, .kg-i:focus-visible::after { opacity: 1; visibility: visible; transform: none; }
 @media (hover: none) { .kg-i:focus::after { opacity: 1; visibility: visible; transform: none; } }
 
+/* stessa ⓘ dentro i quadratini (.tile). Il fumetto si ancora alla tile, ma la
+   tile è stretta: se restasse largo quanto lei diventerebbe una colonna di testo
+   alta mezza pagina, quindi qui va a larghezza contenuto. Le ultime due tile
+   della riga lo aprono verso sinistra, altrimenti uscirebbe dallo schermo. */
+.tile { position: relative; }
+.tile .kg-i::after { left: 0; right: auto; width: max-content; max-width: min(420px, 78vw); }
+.kpi-row .tile:nth-last-child(-n+2) .kg-i::after { left: auto; right: 0; }
+
 @media (max-width: 1020px) { .kpi-groups { grid-template-columns: 1fr; } }
 
 /* otto KPI = due file piene di quattro: con l'auto-fit venivano 7 + 2 spaiate */
