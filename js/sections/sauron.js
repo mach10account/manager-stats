@@ -517,6 +517,9 @@ function tileDelivery() {
   const m = rc.righe[rc.righe.length - 1] || { churn: null, tasso: null, scaduti: 0, nonRinnovati: 0, rinnovi: 0, persi: 0 };
   const gestiti = centriRows().filter(isGestito);
   const senzaPM = gestiti.filter(x => !x.consulente).length;
+  // il portafoglio su cui si lavora davvero adesso: gli altri gestiti sono
+  // parcheggiati (standby, spostati, riparte a settembre, senza stato)
+  const operativi = gestiti.filter(c => STATI_OPERATIVI.some(s => hasTag(c.stato_attivita, s))).length;
   // per PERSONA: due email dello stesso PM non sono due project manager. Chi è
   // stato nascosto col bottone in Delivery non conta (su Notion ha dei centri,
   // ma il project manager non lo fa).
@@ -527,10 +530,15 @@ function tileDelivery() {
   const postiPM = riempimentoRuolo('PM').posti;
 
   return {
-    clienti: { label: 'Clienti in gestione', value: fmt(gestiti.length), sub: nPM + ' project manager attivi',
+    clienti: { label: 'Clienti in gestione', value: fmt(gestiti.length),
+      sub: nPM + ' project manager attivi · ' + fmt(operativi) + ' nel portafoglio operativo',
       info: "righe dell'anagrafica centri (DATABASE CLIENTI di Notion, rifatta ogni notte) che NON hanno "
         + "il tag CLIENTE PERSO/SPARITO in STATO ATTIVITÀ. Contano tutti gli altri stati: ads attive, "
-        + 'onboarding, standby, in attesa di rinnovo e anche chi non ha nessuno stato.' },
+        + 'onboarding, standby, in attesa di rinnovo e anche chi non ha nessuno stato. Il PORTAFOGLIO '
+        + 'OPERATIVO è il sottoinsieme su cui si lavora adesso — ADS ATTIVE, ADS DA LANCIARE, ONBOARDING, '
+        + 'IN ATTESA DI RINNOVO, OPEN DAY, GESTIONE SOCIAL — ed è il metro con cui si misura il carico '
+        + 'delle persone nelle tabelle qui sotto: gli altri ' + fmt(gestiti.length - operativi)
+        + ' sono parcheggiati e non fanno lavoro.' },
     mediaPM: { label: 'Media per PM', value: fmt1(safeDiv(gestiti.length, nPM)),
       sub: 'posti PM impostati: ' + fmt(postiPM),
       info: 'clienti in gestione ÷ project manager distinti sul campo CONSULENTE, contati per PERSONA '
