@@ -376,9 +376,12 @@ function renderKPI() {
     ? (cur >= prev ? '+' : '') + fmt(100 * (cur - prev) / prev) + '% ' + rif + ' (' + eur(prev) + ')'
     : null;
 
-  // commerciale: churn da DATA CLIENTE PERSO · azienda: riempimento sulle capienze
-  // impostate persona per persona nella tab Delivery (fin_capacita)
+  // commerciale: churn dai contratti scaduti non rinnovati · azienda: riempimento
+  // sulle capienze impostate persona per persona nella tab Delivery (fin_capacita)
   const persiMese = centriRows().filter(x => x.data_cliente_perso && ymOf(x.data_cliente_perso) === MESE).length;
+  const rcDash = rinnoviChurn();
+  const ch4 = churnUltimi(MESI_KPI, rcDash.righe);
+  const ch12 = churnUltimi(12, rcDash.righe);
   const gestiti = centriRows().filter(isGestito);
   const riempR = {};
   RUOLI_CAP.forEach(R => { riempR[R.key] = riempimentoRuolo(R.key); });
@@ -452,7 +455,14 @@ function renderKPI() {
       { label: 'Clienti rinnovati', value: fmt(c.rinnovi), info: 'contratti di rinnovo creati nel mese' },
       { label: 'Upsell effettuati', value: fmt(c.upsell) },
       { label: 'Clienti persi', value: fmt(persiMese), tone: persiMese > 0 ? 'bad' : 'good',
-        info: 'segnati persi su Notion nel mese (churn)' },
+        info: 'segnati persi su Notion nel mese, per DATA CLIENTE PERSO: è quando li abbiamo '
+          + 'segnati, non quando se ne sono andati (in media 4 mesi dopo la fine servizio)' },
+      { label: 'Churn ' + MESI_KPI + ' mesi', value: fmtPct(ch4.quota),
+        tone: ch4.quota === null ? undefined : (ch4.quota >= 50 ? 'bad' : undefined),
+        info: ch4.nonRinnovati + ' contratti su ' + fmt(ch4.scaduti) + ' arrivati a scadenza negli ultimi '
+          + MESI_KPI + ' mesi non hanno avuto un contratto successivo entro ' + GRAZIA_RINNOVO
+          + ' giorni dalla fine. Su 12 mesi è ' + fmtPct(ch12.quota) + '. I mesi ancora dentro i '
+          + GRAZIA_RINNOVO + ' giorni possono solo scendere: il dettaglio mese per mese è in Delivery.' },
       { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), info: 'valore medio dei contratti nuovi' },
       { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
         info: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
@@ -1409,11 +1419,21 @@ async function salvaCapacita(ruolo, persona_id, valore) {
 // Vale come rinnovo QUALUNQUE contratto successivo, anche senza tag RINNOVO: se
 // il cliente firma di nuovo non l'abbiamo perso, comunque sia etichettata la riga.
 const GRAZIA_RINNOVO = 60;
+const MESI_KPI = 4;                           // finestra corta dei KPI in cima (la tabella resta a 12)
 const piuGiorni = (iso, n) => {
   const d = new Date(iso + 'T00:00:00');
   d.setDate(d.getDate() + n);
   return dstr(d);
 };
+
+// churn di una finestra di n mesi, dai TOTALI e non come media delle percentuali
+// per riga: un mese con 16 scadenze non deve pesare quanto uno con 66.
+function churnUltimi(n, righe) {
+  const r = righe.slice(-n);
+  const scaduti = r.reduce((a, x) => a + x.scaduti, 0);
+  const nonRinnovati = r.reduce((a, x) => a + x.nonRinnovati, 0);
+  return { scaduti, nonRinnovati, quota: pct(nonRinnovati, scaduti) };
+}
 
 // tasso di rinnovo e churn, mese per mese (ultimi 12)
 function rinnoviChurn() {
@@ -1485,21 +1505,17 @@ function renderDelivery() {
   const ultimi = rc.righe.slice(-12);
   const rinTot = ultimi.reduce((a, r) => a + r.rinnovi, 0);
   const persiTot = ultimi.reduce((a, r) => a + r.persi, 0);
-  // ratio dai TOTALI del periodo, non media delle percentuali per riga: un mese
-  // con 10 scadenze non deve pesare quanto uno con 49.
-  const scadTot = ultimi.reduce((a, r) => a + r.scaduti, 0);
-  const nonRinnTot = ultimi.reduce((a, r) => a + r.nonRinnovati, 0);
-  const churn12 = pct(nonRinnTot, scadTot);
-  // I due KPI in cima guardano solo gli ULTIMI 4 MESI: su 12 pesano ancora
-  // stagioni vecchie e il numero si muove con mesi di ritardo. La tabella qui
-  // sotto resta a 12 mesi con il suo totale, per il confronto storico.
-  const MESI_KPI = 4;
+  // il churn vive nella Dashboard (blocco Commerciale); qui restano la tabella
+  // mese per mese e il suo totale a 12 mesi.
+  const c12 = churnUltimi(12, ultimi);
+  const scadTot = c12.scaduti;
+  const nonRinnTot = c12.nonRinnovati;
+  const churn12 = c12.quota;
+  // Il tasso di rinnovo in cima guarda solo gli ULTIMI 4 MESI: su 12 pesano
+  // ancora stagioni vecchie e il numero si muove con mesi di ritardo.
   const recenti = ultimi.slice(-MESI_KPI);
   const rinRec = recenti.reduce((a, r) => a + r.rinnovi, 0);
   const persiRec = recenti.reduce((a, r) => a + r.persi, 0);
-  const scadRec = recenti.reduce((a, r) => a + r.scaduti, 0);
-  const nonRinnRec = recenti.reduce((a, r) => a + r.nonRinnovati, 0);
-  const churn4 = pct(nonRinnRec, scadRec);
 
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnDelKpi"></div>
@@ -1589,12 +1605,6 @@ function renderDelivery() {
     { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti)), sub: 'solo team delivery' },
     { label: 'Tasso di rinnovo 4 mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
       sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti' },
-    // gli ultimi due mesi della finestra non hanno ancora finito i 60 giorni di
-    // tolleranza: il sub porta il 12 mesi accanto, così non si legge un churn
-    // basso come un miglioramento che non c'è.
-    { label: 'Churn 4 mesi', value: fmtPct(churn4),
-      sub: nonRinnRec + ' non rinnovati su ' + fmt(scadRec) + ' contratti scaduti'
-        + (churn12 === null ? '' : ' · su 12 mesi è ' + fmtPct(churn12)) },
   ]);
 
   RUOLI_CAP.forEach(R => {
