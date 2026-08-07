@@ -1644,10 +1644,16 @@ function renderDelivery() {
         <h2 class="sm-title">Carico del team</h2>
         <div class="sm-sub">Chi non ha nessun cliente su cui lavorare adesso, e nessuna capienza
           impostata, resta fuori dagli elenchi: quasi sempre sono assegnazioni rimaste su clienti persi
-          o parcheggiati. Se gli riassegni qualcuno torna da solo.</div>
+          o parcheggiati. Se gli riassegni qualcuno torna da solo.
+          <strong>Nascondi</strong> toglie una persona dal conteggio del ruolo — dai "project manager
+          attivi", dalla media e dal riempimento — lasciando i suoi clienti dove sono: serve per chi su
+          Notion ha qualche centro ma quel ruolo non lo fa. Per rimetterla dentro spunta
+          <strong>Mostra tutti</strong> qui a destra e premi <strong>Mostra</strong> sulla sua riga.</div>
       </div>
       <label class="tm-toggle"><input type="checkbox" id="fnMostraTutti"${mostraSenzaCarico ? ' checked' : ''}>
         Mostra tutti${nascoste ? ' (' + nascoste + ' fuori elenco)' : ''}</label>
+      <!-- il conteggio comprende sia chi è fuori per mancanza di carico sia chi è
+           stato nascosto a mano: sono le righe che questa spunta fa riapparire -->
     </div>
 
     ${RUOLI_CAP.map(R => `
