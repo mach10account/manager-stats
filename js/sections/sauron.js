@@ -1535,6 +1535,29 @@ function rinnoviChurn() {
   return { months, righe: out, gestiti };
 }
 
+// churn e tasso di rinnovo sui 12 mesi. Le due linee NON sono complementari: il
+// churn guarda i contratti arrivati a scadenza, il tasso di rinnovo i contratti
+// firmati contro i clienti segnati persi. Stanno insieme perché è il confronto
+// che si fa a occhio ogni volta, non perché sommino a 100.
+function renderChurnTrend(righe) {
+  const svg = _mount.querySelector('#fnChurnTrend');
+  if (!svg) return;
+  renderLineChart(svg, righe.map(r => r.mese), righe, [
+    { key: 'churn', color: '--series-3', name: 'Churn' },
+    { key: 'tasso', color: '--series-1', name: 'Tasso di rinnovo' },
+  ], {
+    xlab: ymShort, yfmt: fmtPct, axisFmt: v => Math.round(v) + '%', height: 240, area: false,
+    minMax: 100,   // scala sempre 0-100: senza, un mese al 90% riempirebbe tutto il grafico
+    tip: (r, m) => `<div class="t-date">${ymLabel(m)}${r.provvisorio ? ' · provvisorio' : ''}</div>
+      <div class="t-row"><span>Churn</span><b>${r.churn === null ? '—' : fmtPct(r.churn)}</b></div>
+      <div class="t-row"><span>Contratti scaduti</span><b>${fmt(r.scaduti)}</b></div>
+      <div class="t-row"><span>Non rinnovati</span><b>${fmt(r.nonRinnovati)}</b></div>
+      <div class="t-row"><span>Tasso di rinnovo</span><b>${r.tasso === null ? '—' : fmtPct(r.tasso)}</b></div>
+      <div class="t-row"><span>Rinnovi · persi</span><b>${fmt(r.rinnovi)} · ${fmt(r.persi)}</b></div>
+      ${r.provvisorio ? '<div class="t-row"><span>Finestra ancora aperta</span><b>il churn può solo scendere</b></div>' : ''}`,
+  });
+}
+
 function renderDelivery() {
   const perRuoloRighe = {};
   let nascoste = 0;
@@ -1614,6 +1637,12 @@ function renderDelivery() {
         Quando la finestra si chiude il mese si congela e non si muove più.
         <strong>Tasso di rinnovo</strong> = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese, per data del
         contratto e per DATA CLIENTE PERSO: è un altro conto, non il complemento del churn.</div>
+      <div class="legend">
+        <span class="key"><span class="swatch" style="background:var(--series-3)"></span>Churn</span>
+        <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Tasso di rinnovo</span>
+        <span class="key" style="color:var(--muted)">gli ultimi mesi sono ancora provvisori</span>
+      </div>
+      <div class="chart-wrap"><svg id="fnChurnTrend" width="100%" height="240"></svg></div>
       <div class="table-scroll"><table class="fn-pnl">
         <thead><tr><th>Mese</th><th>Rinnovi</th><th>Clienti persi</th><th>Tasso di rinnovo</th><th>Contratti in scadenza</th><th>Non rinnovati</th><th>Churn</th><th>Valore rinnovi</th><th>Incassato su rinnovi</th></tr></thead>
         <tbody>
@@ -1651,6 +1680,7 @@ function renderDelivery() {
   const T = tileDelivery();
   renderKpiRow(_mount.querySelector('#fnDelKpi'),
     [T.clienti, T.mediaPM, T.costoTeam, T.costoCliente, T.rinnovo, T.churn]);
+  renderChurnTrend(ultimi);
 
   RUOLI_CAP.forEach(R => {
     const el = _mount.querySelector('#fnRuolo' + R.key);
@@ -2062,4 +2092,5 @@ export function onResize() {
   if (!DATA || !_mount) return;
   if (_mount.querySelector('#fnTrend')) renderTrend();
   if (_mount.querySelector('#mkTrend')) renderMktTrend();
+  if (_mount.querySelector('#fnChurnTrend')) renderChurnTrend(rinnoviChurn().righe.slice(-12));
 }
