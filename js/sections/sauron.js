@@ -270,9 +270,9 @@ function costiMese(m) {
 // Il registro costi fotografa lo stato di OGGI: tutte voci mensili che partono
 // dal 2026-01-01, senza storico. Applicato a un mese chiuso produce numeri che
 // non sono mai esistiti (manca l'ad spend, la parte fissa dei setter, i compensi
-// amministratori, i costi straordinari). Il conto economico vero dei mesi chiusi
-// sta sul foglio, e per quei mesi e' quello che vale — stessa scelta gia' fatta
-// per il Marketing: mese chiuso = foglio, mese in corso = calcolato dal vivo.
+// amministratori, i costi straordinari). I COSTI veri dei mesi chiusi stanno sul
+// foglio, e per quei mesi valgono quelli; i RICAVI invece sono sempre Notion
+// (vedi foglioPnl). Mese in corso = tutto calcolato dal vivo.
 // Riga assente = casella vuota sul foglio; importo 0 = il foglio dice "-".
 const SEZ_PNL = ['ricavi', 'rimborsi', 'diretti', 'operativi', 'strutturali'];
 const vociFoglio = m => (DATA.pnlFoglio || [])
@@ -286,10 +286,15 @@ function foglioPnl(m) {
   if (!righe.length) return null;
   const t = {};
   for (const s of SEZ_PNL) t[s] = sommaSez(righe, s);
-  const ricaviNetti = t.ricavi - t.rimborsi;
+  // REGOLA (Leo, 7/8): i RICAVI sono sempre quelli di Notion — le rate davvero
+  // incassate nel mese — anche quando il mese sta sul foglio. Dal foglio si
+  // prendono solo COSTI e storni. Il cash dichiarato lì resta in lordiFoglio,
+  // per il confronto in fondo alla tab P&L: nella scala non entra più.
+  const lordi = splitIncassato(m).tot;
+  const ricaviNetti = lordi - t.rimborsi;
   const margineLordo = ricaviNetti - t.diretti;
   const margineOp = margineLordo - t.operativi;
-  return { righe, sez: t, lordi: t.ricavi, rimborsi: t.rimborsi, costiDiretti: t.diretti,
+  return { righe, sez: t, lordi, lordiFoglio: t.ricavi, rimborsi: t.rimborsi, costiDiretti: t.diretti,
     operativi: t.operativi, strutturali: t.strutturali, ricaviNetti, margineLordo, margineOp,
     ebitda: margineOp - t.strutturali, capex: 0, cashFlow: margineOp - t.strutturali,
     // sul foglio non c'e' una riga capex: cash flow ed EBITDA coincidono
@@ -409,7 +414,7 @@ function renderKPI() {
   // il calcolo su incassi Notion + registro costi. Lo dice ogni tile, così non
   // sembra che dashboard e tab P&L si contraddicano.
   const fonteTxt = p.fonte === 'foglio'
-    ? 'dal foglio P&L del mese' : 'da incassi Notion + registro costi';
+    ? 'ricavi da Notion · costi dal foglio P&L' : 'da incassi Notion + registro costi';
 
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
@@ -606,7 +611,7 @@ function renderTrend() {
       <div class="t-row"><span>EBITDA</span><b>${eur(r.ebitda)}</b></div>
       <div class="t-row"><span>Costi del mese</span><b>${eur(r.costi)}</b></div>
       <div class="t-row"><span>Contratti firmati</span><b>${fmt(r.n)}</b></div>
-      <div class="t-row"><span>P&L</span><b>${r.fonte === 'foglio' ? 'dal foglio' : 'calcolato'}</b></div>`,
+      <div class="t-row"><span>P&L</span><b>${r.fonte === 'foglio' ? 'costi dal foglio' : 'calcolato'}</b></div>`,
   });
 }
 
@@ -926,7 +931,8 @@ function renderPnl() {
   // riconciliazione foglio ↔ app: sono due fonti diverse, le differenze contano
   const commFoglio = sommaSe(d.fg, /^Commissioni /i);
   const conf = !d.fg ? [] : [
-    ['Cash incassato', d.fg.lordi, d.calcolato.lordi, 'foglio vs somma delle rate con data incasso nel mese (Notion)'],
+    ['Cash incassato (dichiarato)', d.fg.lordiFoglio, d.calcolato.lordi,
+      'dichiarato sul foglio vs rate con data incasso nel mese (Notion). Nel P&L vale Notion: qui si vede solo quanto distano'],
     ['Rimborsi e storni', d.fg.rimborsi, d.calcolato.rimborsi, 'sul registro costi sono le voci con sottocategoria "Rimborsi"'],
     ['Commissioni', commFoglio, cm.comm.tot, 'foglio vs formule commissione di Notion (venditore + setter + PM/MB/BS)'],
     ['Costi totali', d.fg.costiTot, d.calcolato.costiTot, 'tutto quello che esce nel mese, rimborsi inclusi'],
@@ -939,16 +945,17 @@ function renderPnl() {
     <div class="card">
       <h2>Conto economico (per cassa) — ${ymLabel(MESE)}</h2>
       <div class="lead-tabs" id="fnPnlFonte">
-        <button data-v="foglio">Foglio P&L</button>
-        <button data-v="calcolato">Calcolato (Notion + registro costi)</button>
+        <button data-v="foglio">Costi dal foglio P&L</button>
+        <button data-v="calcolato">Costi dal registro (app)</button>
       </div>
       <div class="subtitle">${foglio
-        ? `Numeri <strong>dichiarati</strong> sul foglio "PL Database Input", voce per voce come stanno lì.
-           Sui mesi chiusi è il dato ufficiale: il registro costi dell'app non ha storico
+        ? `<strong>Ricavi da Notion</strong> — le rate davvero incassate nel mese — e <strong>costi
+           dichiarati</strong> sul foglio "PL Database Input", voce per voce come stanno lì.
+           Sui mesi chiusi i costi veri sono quelli: il registro dell'app non ha storico
            (nessuna riga per l'ad spend, la parte fissa dei setter, i compensi amministratori)
-           e da solo darebbe un margine gonfiato.`
+           e da solo darebbe un margine gonfiato. Il cash dichiarato sul foglio è nel confronto in fondo.`
         : `Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato); costi dal registro.
-           ${d.fg ? 'Vista forzata: per questo mese <strong>esiste</strong> anche il conto economico del foglio.'
+           ${d.fg ? 'Vista forzata: per questo mese <strong>esistono</strong> anche i costi del foglio.'
                   : 'Per questo mese <strong>non c\'è ancora</strong> una colonna sul foglio P&L.'}`}
         La colonna <strong>% ricavi</strong> è sull'incassato netto; il <strong>Δ</strong> confronta col mese
         precedente (verde = va nella direzione giusta, anche quando è un costo che scende).</div>
@@ -956,8 +963,13 @@ function renderPnl() {
         <thead><tr><th>Voce</th><th>${ymLabel(MESE)}</th><th>% ricavi</th><th>${ymLabel(addYm(MESE, -1))}</th><th>Δ</th></tr></thead>
         <tbody>
           ${foglio ? `
-          ${bloccoSez('Ricavi — cash incassato', 'ricavi')}
-          ${bloccoSez('Storni e rimborsi', 'rimborsi', { costo: true })}
+          ${testa('Ricavi — cash incassato (Notion)')}
+          ${riga('Cash incassato (totale)', x => x.lordi, { cls: 'fn-tot' })}
+          ${riga('di cui: prime rate (nuovi clienti)', x => x.s.nuovi, { indent: true })}
+          ${riga('di cui: rate successive', x => x.s.rate, { indent: true })}
+          ${riga('di cui: rinnovi', x => x.s.rinnovi, { indent: true })}
+          ${riga('di cui: upsell', x => x.s.upsell, { indent: true })}
+          ${bloccoSez('Storni e rimborsi (foglio)', 'rimborsi', { costo: true })}
           ${riga('RICAVI NETTI', x => x.ricaviNetti, { cls: 'fn-tot' })}
           ${bloccoSez('Costi diretti (variabili con il fatturato)', 'diretti', { costo: true })}
           ${riga('MARGINE LORDO', x => x.margineLordo, { cls: 'fn-tot' })}

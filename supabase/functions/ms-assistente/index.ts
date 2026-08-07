@@ -66,7 +66,7 @@ const REGOLE_DATI = `CONVENZIONI DI CALCOLO — sbagliarle produce numeri falsi:
 - Le risposte alle chiamate sono is_answered sull'ultima chiamata CRM4, non si deducono dall'esito Notion.
 - Coorte = mese di CREAZIONE del lead (mese_coorte).
 - I contratti si leggono da v_notion_contratti, mai da fin_contratti.
-- Nel P&L i mesi chiusi vengono dal foglio (fin_pnl); il mese in corso e' parziale.
+- Nel P&L i RICAVI sono sempre gli incassi Notion (rate con data incasso nel mese); dal foglio (fin_pnl) si prendono solo i COSTI e gli storni dei mesi che ci stanno. Il cash dichiarato sul foglio NON e' il ricavo del P&L. Il mese in corso e' parziale e usa il registro costi.
 - Churn di un mese = dei contratti (v_notion_contratti) con fine_servizio in quel mese, quanti NON hanno MAI un contratto successivo per lo stesso nome_centro (creazione_contratto maggiore, senza limiti di tempo: chi rifirma anche sei mesi dopo non e' perso). NON e' "persi del mese / clienti in gestione" e non si calcola su centri.fine_servizio, che al rinnovo non viene aggiornata. I mesi scaduti da meno di 60 giorni hanno quasi tutti i rinnovi ancora da firmare (la firma arriva in media 30 giorni dopo): sono un tetto, non il dato definitivo, e va detto.
 - "Clienti persi nel mese" (tile Sauron) = DATA CLIENTE PERSO in quel mese: e' la data in cui li abbiamo SEGNATI persi, non quella in cui se ne sono andati. Meta' dei persi non ha quella data compilata.`;
 
