@@ -27,13 +27,21 @@
 //                         investimenti e asset · Cash flow = EBITDA − capex
 import { supabase } from '../supabase.js';
 import { fetchAll, nomeDi, personaDi, chiavePersona, personaAttiva, personaHaRuolo } from '../data.js';
-import { renderTable, renderKpiGroups, renderKpiRow } from '../tables.js';
+import { renderTable, renderKpiGroups, renderKpiRow, labelConInfo } from '../tables.js';
 import { renderLineChart } from '../charts.js';
 import { fmt, fmt1, eur, eur2, pct, fmtPct, pctFrac, ratio, safeDiv, fmtCompact, dstr, todayRome, esc } from '../format.js';
 
 let DATA = null;          // { incassi, contratti, centri, costi }
 let _mount = null;
 let _renderId = 0;
+
+// Titolo di card (o di pagina) con la spiegazione in una ⓘ a destra, in hover.
+// Le spiegazioni lunghe sotto il titolo erano muri di testo; il fumetto è quello
+// delle tile, ancorato alla card e largo quanto lei.
+// ⚠️ Il testo finisce in un ATTRIBUTO: niente HTML, e gli a-capo si scrivono \n
+// (li rende .kg-i::after con white-space: pre-line).
+const h2i = (titolo, info) => `<h2>${labelConInfo(titolo, info)}</h2>`;
+const titoloPagina = (titolo, info) => `<h2 class="sm-title">${labelConInfo(titolo, info)}</h2>`;
 
 const MESI = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
               'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
@@ -183,17 +191,55 @@ function contrattualizzato(m, maxDay) {
   return t;
 }
 
+// le rate che SCADEVANO nel mese m, pagate o no. L'incassato è spezzato per
+// QUANDO è entrato: una rata di luglio pagata ad agosto conta qui (la scadenza
+// era luglio) ma non nell'incassato di luglio, ed è il motivo per cui le due
+// tile non coincidono mai. Le somme delle voci fanno l'incassato:
+// nelMese + ritardo + anticipo + senzaData. L'ultima esiste perché incassata()
+// guarda anche la spunta PAGATO: senza quel bucket le righe col solo flag
+// sparirebbero dal dettaglio e le voci non tornerebbero col totale.
 function scadenze(m) {
-  const t = { previsto: 0, incassato: 0, daIncassare: 0, nRate: 0 };
+  const t = { previsto: 0, incassato: 0, daIncassare: 0, nRate: 0,
+              nelMese: 0, nNelMese: 0, ritardo: 0, nRitardo: 0,
+              anticipo: 0, nAnticipo: 0, senzaData: 0, nSenzaData: 0 };
   for (const r of incassi()) {
     if (ymOf(r.data_scadenza) !== m) continue;
     const imp = +r.importo || 0;
     t.previsto += imp;
-    if (incassata(r)) t.incassato += imp;
-    else { t.daIncassare += imp; t.nRate += 1; }
+    if (!incassata(r)) { t.daIncassare += imp; t.nRate += 1; continue; }
+    t.incassato += imp;
+    const mi = ymOf(r.data_incasso);
+    if (!mi) { t.senzaData += imp; t.nSenzaData += 1; }
+    else if (mi === m) { t.nelMese += imp; t.nNelMese += 1; }
+    else if (mi > m) { t.ritardo += imp; t.nRitardo += 1; }
+    else { t.anticipo += imp; t.nAnticipo += 1; }
   }
   return t;
 }
+
+// l'altra faccia: l'incassato del mese m tagliato per SCADENZA della rata.
+// stesse + arretrato + anticipi === splitIncassato(m).tot.
+// Una riga incassata ha sempre una scadenza (se manca, buildData ci mette la
+// data di incasso), quindi il caso senza scadenza è per costruzione "stesse".
+function incassiFuoriMese(m) {
+  const t = { stesse: 0, nStesse: 0, arretrato: 0, nArretrato: 0, anticipi: 0, nAnticipi: 0 };
+  for (const r of incassi()) {
+    if (ymOf(r.data_incasso) !== m) continue;
+    const imp = +r.importo || 0;
+    const ms = ymOf(r.data_scadenza);
+    if (ms && ms < m) { t.arretrato += imp; t.nArretrato += 1; }
+    else if (ms && ms > m) { t.anticipi += imp; t.nAnticipi += 1; }
+    else { t.stesse += imp; t.nStesse += 1; }
+  }
+  return t;
+}
+
+// riga di dettaglio dentro un fumetto ⓘ (il testo va in un attributo, quindi
+// niente HTML: gli a-capo li rende .kg-i::after con white-space: pre-line).
+// Voce a zero = riga assente: un mese senza anticipi non deve mostrare "0 €".
+const rigaTip = (val, n, testo) => n > 0
+  ? '\n· ' + eur(val) + ' (' + fmt(n) + (n === 1 ? ' rata' : ' rate') + ') ' + testo
+  : '';
 
 // rate scadute da oltre 7 giorni e mai incassate.
 // soloMese = true  → solo le scadenze DEL mese m: com'è andato quel mese.
@@ -288,13 +334,13 @@ function foglioPnl(m) {
   for (const s of SEZ_PNL) t[s] = sommaSez(righe, s);
   // REGOLA (Leo, 7/8): i RICAVI sono sempre quelli di Notion — le rate davvero
   // incassate nel mese — anche quando il mese sta sul foglio. Dal foglio si
-  // prendono solo COSTI e storni. Il cash dichiarato lì resta in lordiFoglio,
-  // per il confronto in fondo alla tab P&L: nella scala non entra più.
+  // prendono solo COSTI e storni: il cash dichiarato sul foglio (t.ricavi) non
+  // entra in nessun calcolo.
   const lordi = splitIncassato(m).tot;
   const ricaviNetti = lordi - t.rimborsi;
   const margineLordo = ricaviNetti - t.diretti;
   const margineOp = margineLordo - t.operativi;
-  return { righe, sez: t, lordi, lordiFoglio: t.ricavi, rimborsi: t.rimborsi, costiDiretti: t.diretti,
+  return { righe, sez: t, lordi, rimborsi: t.rimborsi, costiDiretti: t.diretti,
     operativi: t.operativi, strutturali: t.strutturali, ricaviNetti, margineLordo, margineOp,
     ebitda: margineOp - t.strutturali, capex: 0, cashFlow: margineOp - t.strutturali,
     // sul foglio non c'e' una riga capex: cash flow ed EBITDA coincidono
@@ -321,7 +367,7 @@ function pnl(m) {
   const b = daFoglio ? fg : calcolato;
   const rn = b.ricaviNetti;
   return {
-    m, s, cm, fg, calcolato, fonte: daFoglio ? 'foglio' : 'calcolato',
+    m, s, cm, fg, fonte: daFoglio ? 'foglio' : 'calcolato',
     lordi: b.lordi, rimborsi: b.rimborsi, ricaviNetti: rn, costiDiretti: b.costiDiretti,
     margineLordo: b.margineLordo, operativi: b.operativi, margineOp: b.margineOp,
     strutturali: b.strutturali, ebitda: b.ebitda, capex: b.capex, cashFlow: b.cashFlow,
@@ -373,6 +419,7 @@ function renderKPI() {
   const c = contrattualizzato(MESE);
   const cPrev = contrattualizzato(addYm(MESE, -1), maxDay);
   const sc = scadenze(MESE);
+  const fm = incassiFuoriMese(MESE);           // l'incassato del mese tagliato per scadenza
   const ins = insolute(MESE, true);            // solo le scadenze del mese
   const insTot = insolute(MESE);               // esposizione accumulata, per il sottotitolo
   const insPct = pct(ins.nonIncassate, ins.scadute);
@@ -380,6 +427,23 @@ function renderKPI() {
   const delta = (cur, prev) => prev > 0
     ? (cur >= prev ? '+' : '') + fmt(100 * (cur - prev) / prev) + '% ' + rif + ' (' + eur(prev) + ')'
     : null;
+
+  // Le due tile della cassa contano insiemi di rate DIVERSI e la domanda "come fa
+  // A a essere più alto di B?" torna ogni mese: ognuna dice nella sua ⓘ di cosa è
+  // fatta, e le voci sommano sempre al numero della tile.
+  const tipIncassato = (delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate'))
+    + '\nCassa entrata in ' + ymLabel(MESE) + ', da qualsiasi scadenza:'
+    + rigaTip(fm.stesse, fm.nStesse, 'su scadenze di ' + ymLabel(MESE))
+    + rigaTip(fm.arretrato, fm.nArretrato, 'arretrato di scadenze passate')
+    + rigaTip(fm.anticipi, fm.nAnticipi, 'anticipo su scadenze future');
+  const tipScadenze = fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto di ' + ymLabel(MESE)
+    + '. Sono le rate che SCADEVANO nel mese e risultano pagate, in qualunque momento siano entrate:'
+    + rigaTip(sc.nelMese, sc.nNelMese, 'dentro il mese')
+    + rigaTip(sc.ritardo, sc.nRitardo, 'in ritardo, dopo il ' + dtIt(fineMese(MESE)))
+    + rigaTip(sc.anticipo, sc.nAnticipo, 'in anticipo, prima del ' + dtIt(MESE + '-01'))
+    + rigaTip(sc.senzaData, sc.nSenzaData, 'senza data di incasso, solo la spunta PAGATO')
+    + '\nÈ un altro conto rispetto a "Incassato del mese" (' + eur(s.tot) + '), che è la cassa '
+    + 'arrivata nel mese da qualsiasi scadenza: i due numeri non coincidono mai.';
 
   // commerciale: churn dai contratti scaduti non rinnovati · azienda: riempimento
   // sulle capienze impostate persona per persona nella tab Delivery (fin_capacita)
@@ -419,7 +483,7 @@ function renderKPI() {
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { title: 'Incassato', tiles: [
-      { label: 'Incassato del mese', value: eur(s.tot), hero: true, info: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
+      { label: 'Incassato del mese', value: eur(s.tot), hero: true, info: tipIncassato },
       { label: 'Nuovi clienti — 1ª rata pagata', value: eur(s.nuovi),
         info: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente partito' : ' clienti partiti') + ' nel mese · esclusi rinnovi e upsell' },
       { label: 'Rate', value: eur(s.rate), info: 'rate incassate nel mese con numero rata diverso da 1, '
@@ -441,11 +505,7 @@ function renderKPI() {
       { label: 'Rate da incassare nel mese', value: eur(sc.daIncassare), hero: true,
         info: fmt(sc.nRate) + ' rate in scadenza a ' + ymLabel(MESE) + ' non ancora incassate' },
       { label: 'Previsto nel mese', value: eur(sc.previsto), info: 'tutte le rate in scadenza nel mese' },
-      { label: 'Già incassato sulle scadenze', value: eur(sc.incassato),
-        info: fmtPct(pct(sc.incassato, sc.previsto)) + ' del previsto. Sono le rate che SCADEVANO a '
-          + ymLabel(MESE) + ' e risultano pagate, in qualunque momento siano entrate — anche in anticipo o '
-          + 'in ritardo. È un altro conto rispetto a "Incassato del mese", che è la cassa arrivata a '
-          + ymLabel(MESE) + ' da qualsiasi scadenza, arretrato compreso: i due numeri non coincidono mai.' },
+      { label: 'Già incassato sulle scadenze', value: eur(sc.incassato), info: tipScadenze },
       { label: 'Insolute del mese (>7gg)', value: fmtPct(insPct), tone: ins.nonIncassate > 0 ? 'bad' : 'good',
         info: ins.nScadute === 0
           ? 'nessuna rata di ' + ymLabel(MESE) + ' è ancora scaduta da oltre 7 giorni'
@@ -521,10 +581,11 @@ function tileDelivery() {
   // Il confronto tra mesi si legge nel grafico e nella tabella qui sotto.
   const m = rc.righe[rc.righe.length - 1] || { churn: null, tasso: null, scaduti: 0, nonRinnovati: 0, rinnovi: 0, persi: 0 };
   const gestiti = centriRows().filter(isGestito);
-  const senzaPM = gestiti.filter(x => !x.consulente).length;
   // il portafoglio su cui si lavora davvero adesso: gli altri gestiti sono
   // parcheggiati (standby, spostati, riparte a settembre, senza stato)
-  const operativi = gestiti.filter(c => STATI_OPERATIVI.some(s => hasTag(c.stato_attivita, s))).length;
+  const opRows = gestiti.filter(c => STATI_OPERATIVI.some(s => hasTag(c.stato_attivita, s)));
+  const operativi = opRows.length;
+  const senzaPM = opRows.filter(x => !x.consulente).length;
   // per PERSONA: due email dello stesso PM non sono due project manager. Chi è
   // stato nascosto col bottone in Delivery non conta (su Notion ha dei centri,
   // ma il project manager non lo fa).
@@ -544,18 +605,24 @@ function tileDelivery() {
         + 'IN ATTESA DI RINNOVO, OPEN DAY, GESTIONE SOCIAL — ed è il metro con cui si misura il carico '
         + 'delle persone nelle tabelle qui sotto: gli altri ' + fmt(gestiti.length - operativi)
         + ' sono parcheggiati e non fanno lavoro.' },
-    mediaPM: { label: 'Media per PM', value: fmt1(safeDiv(gestiti.length, nPM)),
-      sub: 'posti PM impostati: ' + fmt(postiPM),
-      info: 'clienti in gestione ÷ project manager distinti sul campo CONSULENTE, contati per PERSONA '
-        + '(due email dello stesso PM fanno uno solo, via anagrafica del team). ⚠️ Al numeratore ci sono '
-        + 'anche i ' + fmt(senzaPM) + ' clienti senza consulente e quelli parcheggiati: il carico vero, '
-        + 'sul portafoglio operativo e persona per persona, è nelle tabelle qui sotto.' },
+    mediaPM: { label: 'Media per PM', value: fmt1(safeDiv(operativi, nPM)),
+      sub: fmt(operativi) + ' nel portafoglio operativo · posti PM impostati: ' + fmt(postiPM),
+      info: 'clienti del PORTAFOGLIO OPERATIVO ÷ project manager distinti sul campo CONSULENTE, contati '
+        + 'per PERSONA (due email dello stesso PM fanno uno solo, via anagrafica del team). Fuori dal '
+        + 'numeratore restano i ' + fmt(gestiti.length - operativi) + ' gestiti parcheggiati (standby, '
+        + 'spostati, riparte a settembre, senza stato), che non fanno lavoro: è lo stesso metro delle '
+        + 'tabelle qui sotto. ⚠️ Ci sono dentro anche i ' + fmt(senzaPM) + ' clienti operativi senza '
+        + 'consulente, quindi la media è più alta di quella che vede chi un PM ce l\'ha: il carico persona '
+        + 'per persona è nelle tabelle qui sotto.' },
     costoTeam: { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese',
       info: 'somma delle voci del registro costi (tab Costi) con reparto Delivery attive nel mese '
         + 'selezionato. Sono i compensi fissi: le commissioni sugli incassi non sono qui, stanno nel P&L.' },
-    costoCliente: { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti.length)), sub: 'solo team delivery',
-      info: 'costo del team delivery ÷ clienti in gestione. Solo il delivery: non ci sono marketing, '
-        + 'commerciale, struttura né commissioni.' },
+    costoCliente: { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, operativi)),
+      sub: 'solo team delivery · su ' + fmt(operativi) + ' clienti operativi',
+      info: 'costo del team delivery ÷ clienti del PORTAFOGLIO OPERATIVO, lo stesso metro della Media per '
+        + 'PM: i ' + fmt(gestiti.length - operativi) + ' gestiti parcheggiati non fanno lavoro e '
+        + 'abbasserebbero il costo senza motivo. Solo il delivery: non ci sono marketing, commerciale, '
+        + 'struttura né commissioni.' },
     rinnovo: { label: 'Tasso di rinnovo', value: fmtPct(m.tasso),
       sub: m.rinnovi + ' rinnovi · ' + m.persi + ' persi a ' + ymLabel(MESE),
       info: 'rinnovi ÷ (rinnovi + clienti persi) di ' + ymLabel(MESE) + '. I rinnovi sono i contratti col '
@@ -641,11 +708,11 @@ const DASH_HTML = `
   <div class="kpi-row" id="fnDashKpi"></div>
 
   <div class="card">
-    <h2>Andamento mensile</h2>
-    <div class="subtitle"><span id="fnTrendRange"></span>: incassato (per data incasso),
-      contrattualizzato (per data di creazione del contratto) ed EBITDA — incasso Notion meno i costi,
-      dal foglio P&L sui mesi chiusi e dal registro sul mese in corso. Se l'EBITDA va sotto zero la
-      scala scende con lui e compare la linea tratteggiata dello zero.</div>
+    ${h2i('Andamento mensile',
+      'Incassato (per data incasso), contrattualizzato (per data di creazione del contratto) ed EBITDA '
+      + '— incasso Notion meno i costi, dal foglio P&L sui mesi chiusi e dal registro sul mese in corso.'
+      + '\nSe l\'EBITDA va sotto zero la scala scende con lui e compare la linea tratteggiata dello zero.')}
+    <div class="subtitle"><span id="fnTrendRange"></span></div>
     <div class="legend">
       <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Incassato</span>
       <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Contrattualizzato</span>
@@ -682,14 +749,13 @@ function renderCostiPage() {
   for (const r of REPARTI) totRep[r] = sumImporti(byRep(r));
   totRep.Commerciale += cm.comm.tot;
   const totale = REPARTI.reduce((a, r) => a + totRep[r], 0);
-  const spente = costi().filter(x => !x.attivo);
 
   const subRep = {
     Fissi: byRep('Fissi').length + ' voci ricorrenti (software, uffici, struttura)',
     Commerciale: byRep('Commerciale').length + ' voci + commissioni automatiche dal venduto',
     Marketing: 'campagne e spese marketing (l’ad spend di SV non è ancora collegato)',
     Delivery: 'il team che eroga il servizio, per funzione',
-    Extra: 'spese una tantum del mese (consulenze, viaggi, formazione, rimborsi…)',
+    Extra: 'tutto quello che non sta negli altri reparti: consulenze, compensi, viaggi, formazione, rimborsi — una tantum o ricorrenti',
   };
 
   content.innerHTML = `
@@ -704,26 +770,19 @@ function renderCostiPage() {
     ${REPARTI.map(r => `
     <div class="card">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
-        <h2 style="margin-right:auto">${REPARTO_LABEL[r]} · ${eur(totRep[r])}</h2>
+        <h2 style="margin-right:auto">${labelConInfo(REPARTO_LABEL[r] + ' · ' + eur(totRep[r]), subRep[r])}</h2>
         <button class="tk-btn tk-btn-pri" data-nuovo="${r}">+ Voce</button>
       </div>
-      <div class="subtitle">${subRep[r]}</div>
       ${r === 'Commerciale' ? `<div class="subtitle" id="fnCommAuto"></div>` : ''}
       <div class="table-scroll"><table id="fnRep${r}"></table></div>
-    </div>`).join('')}
-    <div class="card">
-      <h2>Voci disattivate</h2>
-      <div class="subtitle">Storicizzate o da attivare (le voci DEMO del prototipo nascono qui):
-        clicca per modificarle e rimetterle in gioco.</div>
-      <div class="table-scroll"><table id="fnRepSpente"></table></div>
-    </div>`;
+    </div>`).join('')}`;
 
   renderKpiRow(_mount.querySelector('#fnCostiKpi'), [
     { label: 'Costi fissi', value: eur(totRep.Fissi) },
     { label: 'Reparto commerciale', value: eur(totRep.Commerciale), sub: 'di cui commissioni ' + eur(cm.comm.tot) },
     { label: 'Marketing', value: eur(totRep.Marketing) },
     { label: 'Delivery', value: eur(totRep.Delivery) },
-    { label: 'Costi straordinari', value: eur(totRep.Extra), sub: 'una tantum del mese' },
+    { label: 'Costi straordinari', value: eur(totRep.Extra), sub: 'fuori dagli altri reparti' },
   ]);
 
   const commEl = _mount.querySelector('#fnCommAuto');
@@ -738,19 +797,6 @@ function renderCostiPage() {
     if (!costiSort[r]) costiSort[r] = { key: 'importo', dir: -1 };
     renderTable(el, costoCols(r), rows, costiSort[r],
       k => { costiSort[r] = { key: k, dir: costiSort[r].key === k ? -costiSort[r].dir : -1 }; renderCostiPage(); },
-      { onRowClick: row => apriFormCosto(row), rowLink: () => true });
-  }
-
-  const elSp = _mount.querySelector('#fnRepSpente');
-  if (!spente.length) elSp.innerHTML = '<div class="status">Nessuna voce disattivata.</div>';
-  else {
-    renderTable(elSp, [
-      { key: 'descrizione', label: 'Voce' },
-      { key: 'reparto', label: 'Reparto' },
-      { key: 'importo', label: 'Importo', fmt: eur },
-      { key: 'frequenza', label: 'Frequenza', fmt: v => FREQ_LABEL[v] || v },
-      { key: 'note', label: 'Note', fmt: v => esc(v || '') },
-    ], spente, { key: 'importo', dir: -1 }, () => {},
       { onRowClick: row => apriFormCosto(row), rowLink: () => true });
   }
 
@@ -861,8 +907,7 @@ function apriFormCosto(c, repartoDefault) {
 //  · COSTI — dal foglio "PL Database Input" nei mesi che ci stanno (il dato
 //    ufficiale); dal registro costi solo sul mese in corso, dove il foglio non
 //    ha ancora la colonna. Il registro sui mesi chiusi vale poco (niente storico,
-//    niente ad spend) e infatti non si può più scegliere: resta solo nel pannello
-//    "Foglio e app a confronto", come diagnostica.
+//    niente ad spend) e infatti non si può più scegliere.
 
 // quanto pesa la voce `voce` nel mese x (null = riga assente = casella vuota)
 const importoVoce = (x, voce) => {
@@ -941,33 +986,21 @@ function renderPnl() {
   // crediti fuori P&L: le righe informative in fondo al foglio
   const info = d.fg ? d.fg.righe.filter(r => r.sezione === 'info' && (+r.importo || 0) > 0) : [];
 
-  // riconciliazione foglio ↔ app: sono due fonti diverse, le differenze contano
-  const commFoglio = sommaSe(d.fg, /^Commissioni /i);
-  const conf = !d.fg ? [] : [
-    ['Cash incassato (dichiarato)', d.fg.lordiFoglio, d.calcolato.lordi,
-      'dichiarato sul foglio vs rate con data incasso nel mese (Notion). Nel P&L vale Notion: qui si vede solo quanto distano'],
-    ['Rimborsi e storni', d.fg.rimborsi, d.calcolato.rimborsi, 'sul registro costi sono le voci con sottocategoria "Rimborsi"'],
-    ['Commissioni', commFoglio, cm.comm.tot, 'foglio vs formule commissione di Notion (venditore + setter + PM/MB/BS)'],
-    ['Costi totali', d.fg.costiTot, d.calcolato.costiTot, 'tutto quello che esce nel mese, rimborsi inclusi'],
-    ['EBITDA', d.fg.ebitda, d.calcolato.ebitda, 'il numero che finisce in Dashboard e nel grafico 12 mesi'],
-  ];
-
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnPnlKpi"></div>
 
     <div class="card">
-      <h2>Conto economico (per cassa) — ${ymLabel(MESE)}</h2>
-      <div class="subtitle">${foglio
-        ? `<strong>Ricavi da Notion</strong> — le rate davvero incassate nel mese — e <strong>costi
-           dichiarati</strong> sul foglio "PL Database Input", voce per voce come stanno lì.
-           Sui mesi chiusi i costi veri sono quelli: il registro dell'app non ha storico
-           (nessuna riga per l'ad spend, la parte fissa dei setter, i compensi amministratori)
-           e da solo darebbe un margine gonfiato. Il cash dichiarato sul foglio è nel confronto in fondo.`
-        : `Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato). Costi dal
-           registro dell'app: per questo mese <strong>non c'è ancora</strong> una colonna sul foglio P&L —
-           quando la compili, i costi passeranno da soli a quelli del foglio.`}
-        La colonna <strong>% ricavi</strong> è sull'incassato netto; il <strong>Δ</strong> confronta col mese
-        precedente (verde = va nella direzione giusta, anche quando è un costo che scende).</div>
+      ${h2i('Conto economico (per cassa) — ' + ymLabel(MESE),
+        (foglio
+          ? 'Ricavi da Notion — le rate davvero incassate nel mese — e costi dichiarati sul foglio '
+            + '"PL Database Input", voce per voce come stanno lì. Sui mesi chiusi i costi veri sono quelli: '
+            + 'il registro dell\'app non ha storico (nessuna riga per l\'ad spend, la parte fissa dei setter, '
+            + 'i compensi amministratori) e da solo darebbe un margine gonfiato.'
+          : 'Ricavi = incassi realmente entrati nel mese (non il fatturato contrattualizzato). Costi dal '
+            + 'registro dell\'app: per questo mese non c\'è ancora una colonna sul foglio P&L — quando la '
+            + 'compili, i costi passeranno da soli a quelli del foglio.')
+        + '\nLa colonna "% ricavi" è sull\'incassato netto; il Δ confronta col mese precedente '
+        + '(verde = va nella direzione giusta, anche quando è un costo che scende).')}
       <div class="table-scroll"><table class="fn-pnl">
         <thead><tr><th>Voce</th><th>${ymLabel(MESE)}</th><th>% ricavi</th><th>${ymLabel(addYm(MESE, -1))}</th><th>Δ</th></tr></thead>
         <tbody>
@@ -1026,30 +1059,12 @@ function renderPnl() {
 
     <div class="kpi-row" id="fnPnlInc"></div>
 
-    ${conf.length ? `
     <div class="card">
-      <h2>Foglio e app a confronto — ${ymLabel(MESE)}</h2>
-      <div class="subtitle">Le due fonti non devono per forza coincidere: il foglio è la cassa come la vede
-        l'amministrazione, l'app somma il registro rate di Notion e il registro costi. Le differenze grosse
-        sono un buon posto dove cercare rate mancanti o costi mai registrati.</div>
-      <div class="table-scroll"><table class="fn-pnl">
-        <thead><tr><th>Voce</th><th>Foglio</th><th>Calcolato dall'app</th><th>Δ</th><th>Come leggerla</th></tr></thead>
-        <tbody>${conf.map(([lab, a, b, nota]) => `
-          <tr><td class="name">${esc(lab)}</td><td>${eur(a)}</td><td>${eur(b)}</td>
-            <td><span class="${Math.abs(a - b) < 1 ? '' : (a - b >= 0 ? 'val-good' : 'val-bad')}">${
-              (a - b >= 0 ? '+' : '−') + eur(Math.abs(a - b))}</span></td>
-            <td class="fn-nota">${esc(nota)}</td></tr>`).join('')}
-        </tbody>
-      </table></div>
-    </div>` : ''}
-
-    <div class="card">
-      <h2>Dove vanno i soldi — ${ymLabel(MESE)}</h2>
-      <div class="subtitle">${foglio
+      ${h2i('Dove vanno i soldi — ' + ymLabel(MESE), foglio
         ? 'Le 12 voci di costo più pesanti del foglio, così come sono scritte lì.'
-        : `Le 12 voci più pesanti del mese, commissioni incluse.
-           Il personale è unito per ruolo: una riga per i project manager, una per i media buyer e così via
-           (il dettaglio persona per persona è nella tab Costi).`}</div>
+        : 'Le 12 voci più pesanti del mese, commissioni incluse.'
+          + '\nIl personale è unito per ruolo: una riga per i project manager, una per i media buyer e '
+          + 'così via (il dettaglio persona per persona è nella tab Costi).')}
       ${topCosti.length ? topCosti.map(x => `
         <div class="esito-row">
           <div class="esito-top"><span class="lbl">${esc(x.etichetta)}${x.n > 1 ? ` <span style="color:var(--muted);font-weight:400">· ${x.n} persone</span>` : ''}</span>
@@ -1139,9 +1154,10 @@ const MKT_HTML = `
   </div>
 
   <div class="card">
-    <h2>Inserimento dati mese</h2>
-    <div class="subtitle">Si salva da solo appena esci da una casella. Lascia vuoto ciò che non hai:
-      un campo vuoto non vale zero, i KPI che dipendono da lui restano "—".</div>
+    ${h2i('Inserimento dati mese',
+      'Si salva da solo appena esci da una casella.'
+      + '\nLascia vuoto ciò che non hai: un campo vuoto non vale zero, i KPI che dipendono da lui '
+      + 'restano "—".')}
     <div class="mm-grid" id="mkForm"></div>
   </div>
 
@@ -1660,19 +1676,40 @@ function renderDelivery() {
   const nonRinnTot = c12.nonRinnovati;
   const churn12 = c12.quota;
 
+  // base di calcolo del ruolo, in parole: cambia per PM/media buyer (portafoglio
+  // operativo) e beauty (solo ADS ATTIVE), ed è la domanda che torna più spesso.
+  const tipCarico = R => {
+    const base = R.base === 'attive'
+      ? R.baseTxt + ' (stato ADS ATTIVE su Notion), non tutti i clienti seguiti'
+      : R.base === 'operativo'
+        ? R.baseTxt + ' — ' + STATI_OPERATIVI.join(', ') + ' — cioè i clienti su cui si lavora adesso: '
+          + 'restano fuori spostati a estetista indipendente, riparte a settembre, standby e quelli senza stato'
+        : R.baseTxt + ' (tutti gli stati tranne CLIENTE PERSO/SPARITO)';
+    return 'La capienza la imposti tu nella colonna a fianco: si salva da sola e vale anche per il '
+      + 'riempimento team in Dashboard. Finché non la tocchi vale ' + R.def + '.'
+      + '\nLa saturazione è calcolata sui ' + base + '.'
+      + '\n' + (R.key === 'PM'
+        ? 'Rinnovi e incassato sono attribuiti al PM del centro (join per nome del centro).'
+        : 'Rinnovi attribuiti alla persona assegnata al centro.')
+      + (riemp[R.key].senza > 0
+        ? '\n⚠️ ' + fmt(riemp[R.key].senza) + ' ' + R.baseTxt + ' non hanno un ' + R.plur
+          + ' assegnato su Notion.'
+        : '');
+  };
+
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="kpi-row" id="fnDelKpi"></div>
 
     <div class="sm-head">
       <div>
-        <h2 class="sm-title">Carico del team</h2>
-        <div class="sm-sub">Chi non ha nessun cliente su cui lavorare adesso, e nessuna capienza
-          impostata, resta fuori dagli elenchi: quasi sempre sono assegnazioni rimaste su clienti persi
-          o parcheggiati. Se gli riassegni qualcuno torna da solo.
-          <strong>Nascondi</strong> toglie una persona dal conteggio del ruolo — dai "project manager
-          attivi", dalla media e dal riempimento — lasciando i suoi clienti dove sono: serve per chi su
-          Notion ha qualche centro ma quel ruolo non lo fa. Per rimetterla dentro spunta
-          <strong>Mostra tutti</strong> qui a destra e premi <strong>Mostra</strong> sulla sua riga.</div>
+        ${titoloPagina('Carico del team',
+          'Chi non ha nessun cliente su cui lavorare adesso, e nessuna capienza impostata, resta fuori '
+          + 'dagli elenchi: quasi sempre sono assegnazioni rimaste su clienti persi o parcheggiati. '
+          + 'Se gli riassegni qualcuno torna da solo.'
+          + '\n"Nascondi" toglie una persona dal conteggio del ruolo — dai "project manager attivi", dalla '
+          + 'media e dal riempimento — lasciando i suoi clienti dove sono: serve per chi su Notion ha '
+          + 'qualche centro ma quel ruolo non lo fa. Per rimetterla dentro spunta "Mostra tutti" qui a '
+          + 'destra e premi "Mostra" sulla sua riga.')}
       </div>
       <label class="tm-toggle"><input type="checkbox" id="fnMostraTutti"${mostraSenzaCarico ? ' checked' : ''}>
         Mostra tutti${nascoste ? ' (' + nascoste + ' fuori elenco)' : ''}</label>
@@ -1682,18 +1719,7 @@ function renderDelivery() {
 
     ${RUOLI_CAP.map(R => `
     <div class="card">
-      <h2>Carico per ${R.plur}</h2>
-      <div class="subtitle">La <strong>capienza la imposti tu</strong> nella colonna a fianco: si salva da sola e vale
-        anche per il riempimento team in Dashboard. Finché non la tocchi vale ${R.def}.
-        La saturazione è calcolata sui <strong>${R.baseTxt}</strong>${R.base === 'attive'
-          ? ' (stato ADS ATTIVE su Notion), non su tutti i clienti seguiti'
-          : (R.base === 'operativo'
-            ? ` — ${STATI_OPERATIVI.join(', ')} — cioè i clienti su cui si lavora adesso: restano fuori
-                spostati a estetista indipendente, riparte a settembre, standby e quelli senza stato`
-            : ' (tutti gli stati tranne CLIENTE PERSO/SPARITO)')}.
-        ${R.key === 'PM' ? 'Rinnovi e incassato sono attribuiti al PM del centro (join per nome del centro).'
-          : 'Rinnovi attribuiti alla persona assegnata al centro.'}
-        ${riemp[R.key].senza > 0 ? `<strong>${fmt(riemp[R.key].senza)} ${R.baseTxt} non hanno un ${R.plur} assegnato</strong> su Notion.` : ''}</div>
+      ${h2i('Carico per ' + R.plur, tipCarico(R))}
       <div class="table-scroll"><table id="fnRuolo${R.key}"></table></div>
     </div>`).join('')}
 
@@ -1704,16 +1730,16 @@ function renderDelivery() {
     </div>
 
     <div class="card">
-      <h2>Rinnovi e churn, mese per mese</h2>
-      <div class="subtitle"><strong>Churn</strong> = dei contratti che finivano in quel mese, quanti NON hanno
-        mai avuto un contratto successivo per lo stesso centro. Nessun limite di tempo: se il cliente rifirma
-        sei mesi dopo, il churn del mese in cui era scaduto scende — un cliente che torna non l'abbiamo perso.
-        Vale come rinnovo qualunque contratto successivo, anche senza tag RINNOVO. ⚠️ Ogni mese può ancora
-        migliorare, ma quelli marcati <em>provv.</em> molto di più: sono scaduti da meno di ${GRAZIA_RINNOVO}
-        giorni e la firma del rinnovo arriva in media 30 giorni dopo la fine del servizio, quindi lì i rinnovi
-        in gran parte devono ancora arrivare.
-        <strong>Tasso di rinnovo</strong> = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese, per data del
-        contratto e per DATA CLIENTE PERSO: è un altro conto, non il complemento del churn.</div>
+      ${h2i('Rinnovi e churn, mese per mese',
+        'Churn = dei contratti che finivano in quel mese, quanti NON hanno mai avuto un contratto '
+        + 'successivo per lo stesso centro. Nessun limite di tempo: se il cliente rifirma sei mesi dopo, '
+        + 'il churn del mese in cui era scaduto scende — un cliente che torna non l\'abbiamo perso. '
+        + 'Vale come rinnovo qualunque contratto successivo, anche senza tag RINNOVO.'
+        + '\n⚠️ Ogni mese può ancora migliorare, ma quelli marcati "provv." molto di più: sono scaduti da '
+        + 'meno di ' + GRAZIA_RINNOVO + ' giorni e la firma del rinnovo arriva in media 30 giorni dopo la '
+        + 'fine del servizio, quindi lì i rinnovi in gran parte devono ancora arrivare.'
+        + '\nTasso di rinnovo = rinnovi firmati ÷ (rinnovi + clienti persi) nel mese, per data del contratto '
+        + 'e per DATA CLIENTE PERSO: è un altro conto, non il complemento del churn.')}
       <div class="legend">
         <span class="key"><span class="swatch" style="background:var(--series-3)"></span>Churn</span>
         <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Tasso di rinnovo</span>
@@ -1746,9 +1772,9 @@ function renderDelivery() {
     </div>
 
     <div class="card">
-      <h2>Classifica per rinnovi</h2>
-      <div class="subtitle">Contratti di rinnovo attribuiti al project manager e alla beauty specialist del centro,
-        su tutto lo storico disponibile.</div>
+      ${h2i('Classifica per rinnovi',
+        'Contratti di rinnovo attribuiti al project manager e alla beauty specialist del centro, '
+        + 'su tutto lo storico disponibile.')}
       <div class="fn-rank" id="fnRank"></div>
     </div>`;
 
@@ -1885,9 +1911,9 @@ function renderClienti() {
     <div class="kpi-row" id="fnLtvKpi"></div>
 
     <div class="card">
-      <h2>Andamento per mese</h2>
-      <div class="subtitle">Ultimi 12 mesi: contratti nuovi e di rinnovo creati, valore contrattualizzato,
-        incassato effettivo e clienti persi.</div>
+      ${h2i('Andamento per mese',
+        'Ultimi 12 mesi: contratti nuovi e di rinnovo creati, valore contrattualizzato, '
+        + 'incassato effettivo e clienti persi.')}
       <div class="table-scroll"><table class="fn-pnl">
         <thead><tr><th>Mese</th><th>Nuovi clienti</th><th>Rinnovi</th><th>Clienti persi</th><th>Contrattualizzato</th><th>Incassato</th></tr></thead>
         <tbody>${perMese.map(r => `<tr>
@@ -2008,9 +2034,9 @@ function renderReport() {
   ];
   _mount.querySelector('#fnContent').innerHTML = `
     <div class="card">
-      <h2>Esportazioni</h2>
-      <div class="subtitle">File CSV pronti per Excel (separatore <code>;</code>, virgola decimale).
-        Rispettano il mese e l'agenzia selezionati in alto.</div>
+      ${h2i('Esportazioni',
+        'File CSV pronti per Excel (separatore ";", virgola decimale). '
+        + 'Rispettano il mese e l\'agenzia selezionati in alto.')}
       <div class="fn-export">
         ${voci.map(([k, t, s]) => `
           <div class="fn-export-row">

@@ -255,7 +255,8 @@ header::before { /* alone di luce in alto a sinistra */
 .kpi-row { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
 
 /* testata di pagina dentro una sezione (titolo + nota a sinistra, chip a destra) */
-.sm-head { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.sm-head { position: relative; display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.sm-title .kg-i { width: 15px; height: 15px; margin-left: 7px; vertical-align: 2px; font-size: 9.5px; }
 .sm-head .lead-tabs { margin: 0 0 0 auto; }
 .sm-title { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: 0.01em; }
 .sm-sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; max-width: 78ch; }
@@ -354,7 +355,9 @@ header::before { /* alone di luce in alto a sinistra */
   background: var(--text-primary); color: var(--page);
   box-shadow: 0 10px 28px -12px rgba(16, 42, 84, 0.55);
   font: 500 11.5px/1.45 var(--font-ui); letter-spacing: 0; text-transform: none;
-  text-align: left; white-space: normal;
+  /* pre-line: le spiegazioni con un dettaglio voce per voce arrivano con gli \n
+     (il testo sta in un attributo, quindi non può contenere HTML) */
+  text-align: left; white-space: pre-line;
   opacity: 0; visibility: hidden; transform: translateY(-3px);
   transition: opacity .13s ease, transform .13s ease;
 }
@@ -470,10 +473,14 @@ thead th:nth-last-child(-n+4) .kg-i::after { left: auto; right: 0; }
 
 /* ── CARD ──────────────────────────────────────────────────────────────── */
 .card {
+  position: relative;           /* àncora dei fumetti ⓘ dei titoli (vedi .kg-i::after) */
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
   padding: 20px; margin-bottom: 18px; box-shadow: var(--shadow-card);
 }
 .card h2 { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: 0.01em; margin-bottom: 4px; }
+/* la stessa ⓘ delle tile, ma accanto a un titolo di card: un filo più grande,
+   perché il titolo è a 19px e l'icona da 13 sparirebbe */
+.card h2 .kg-i { width: 15px; height: 15px; margin-left: 7px; vertical-align: 2px; font-size: 9.5px; }
 .card .subtitle { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
 .legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
 .legend .key { display: inline-flex; align-items: center; gap: 6px; }
@@ -990,11 +997,6 @@ select.ac-vede {
 }
 .fn-pnl tr.fn-tot td { font-weight: 700; border-top: 1px solid var(--baseline); }
 .fn-pnl td.fn-quota { color: var(--muted); }
-/* riconciliazione foglio ↔ app: l'ultima colonna è una nota, non un numero */
-.fn-pnl td.fn-nota {
-  color: var(--muted); font-size: 12px; text-align: left;
-  white-space: normal; min-width: 220px; max-width: 380px;
-}
 /* capienza per persona, modificabile dentro le tabelle Delivery */
 .cap-inp {
   width: 66px; padding: 3px 6px; font: inherit; font-size: 13px; text-align: right;
