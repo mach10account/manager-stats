@@ -52,6 +52,7 @@ Prefissi: `mkt_`/`perf_`/`fb_` (marketing centri) · `calls`/`leads`/`esiti` (be
 
 - I file in `migrations/` si applicano a mano nel DB e si committano come **storia**. Alcuni sono stub ("vedi il DB per il corpo completo"). Il corpo vivo di una vista sta **solo nel DB**.
 - Prima di ogni `create or replace view`: leggi il corpo vivo con `select pg_get_viewdef('public.<vista>'::regclass, true)` e modifica **quello**. Copiare il corpo da una vecchia migration ha già cancellato in silenzio un fix (gate esiti) falsando il funnel per 5 giorni — la migration 48 è il ripristino.
+- ⚠️ `pg_get_viewdef` NON emette il `with (security_invoker = on)` e il replace senza WITH **azzera** le reloptions: il flag va rimesso a mano OGNI volta, altrimenti la vista gira da owner (`postgres`) e bypassa tutta la RLS. Successo con la migration 50 su `v_panoramica_centro` (chiunque vedeva tutti i centri), ripristino nella 54.
 - `create or replace view` ammette solo **append** di colonne in coda e non cambia i tipi delle esistenti (castare esplicitamente, es. `::numeric`).
 - Dopo ogni replace: confrontare un numero noto prima/dopo.
 - Migration nuove: `YYYYMMDD_NN_nome.sql`, `NN` progressivo sull'ultimo presente.

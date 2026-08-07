@@ -1,0 +1,23 @@
+-- 2026-08-07 · SICUREZZA · v_panoramica_centro riacquista security_invoker=on.
+--
+-- La migration 50 (risposte in Panoramica) ha rifatto la vista partendo dal corpo
+-- vivo con pg_get_viewdef — giusto per il CORPO, ma pg_get_viewdef NON emette la
+-- clausola WITH (security_invoker = on), e `create or replace view` senza WITH
+-- AZZERA le reloptions. Risultato: la vista girava con i privilegi dell'owner
+-- (postgres, che possiede anche le tabelle base e quindi bypassa la RLS) — un
+-- utente authenticated SENZA ALCUNA sezione vedeva comunque spesa/ricavi/consulenti
+-- di tutti i centri dalla vista, e dalla RPC api_panoramica_centro (migration 53)
+-- che vi si appoggia. Misurato prima del fix: tabella base 0 righe (RLS ok),
+-- vista 2.243 righe, RPC 100 centri. Era l'UNICA vista di public senza il flag.
+--
+-- ⚠️ LEZIONE (vale per ogni vista): quando si parte da pg_get_viewdef, la clausola
+-- `with (security_invoker = on)` va RIMESSA A MANO nel create or replace — il
+-- corpo vivo non la contiene. La 52 l'aveva rimessa per agg_mkt_ad_giorno; qui
+-- si ripristina il flag perso dalla 50 senza toccare il corpo.
+--
+-- Verifica post-fix (impersonando, con set local role):
+--   utente senza sezioni → vista 0 righe, RPC 0 righe;
+--   consulente scoped    → solo i suoi centri, RPC ≡ vista riga per riga;
+--   admin                → 121 centri sul 30gg, invariato.
+
+alter view public.v_panoramica_centro set (security_invoker = on);
