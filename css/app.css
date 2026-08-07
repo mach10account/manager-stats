@@ -263,10 +263,23 @@ header::before { /* alone di luce in alto a sinistra */
 .tile {
   background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px;
   padding: 14px 16px; box-shadow: var(--shadow-card);
-  /* i numeri restano allineati fra loro anche quando un'etichetta va a capo */
+  /* ripiego senza subgrid: allinea solo il fondo (vedi @supports più sotto) */
   display: flex; flex-direction: column;
 }
 .tile .value { margin-top: auto; }
+
+/* Le tre fasce — etichetta, numero, nota — sono le STESSE righe per tutte le
+   tile della riga: un'etichetta che va a capo (FATTURATO CONTRATTUALIZZATO) o
+   una nota su due righe non spostano più il numero delle vicine. Prima, con il
+   solo flex, si allineava il fondo: bastava una nota più lunga per far salire
+   il numero di quella tile. Le tre righe le disegna il contenitore, quindi il
+   row-gap del .kpi-row va azzerato qui dentro (lo spazio lo fanno i margini). */
+@supports (grid-template-rows: subgrid) {
+  .kpi-row .tile {
+    display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 0;
+  }
+  .kpi-row .tile .value { margin-top: 0; align-self: end; }
+}
 .tile .label, .kg-tile .label {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
   color: var(--muted); margin-bottom: 6px;
