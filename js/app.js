@@ -14,7 +14,7 @@ import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';
 import * as vendita from './sections/vendita.js';
-import * as sauron from './sections/sauron.js?v=41';   // ?v da bumpare quando cambia sauron.js (vedi nota in index.html)
+import * as sauron from './sections/sauron.js?v=42';   // ?v da bumpare quando cambia sauron.js (vedi nota in index.html)
 import * as accessi from './sections/accessi.js';
 import * as task from './sections/task.js';
 
