@@ -36,7 +36,12 @@ export function renderTable(el, cols, rows, sort, onSort, opts = {}) {
   });
 
   el.innerHTML = h + '</tbody>';
-  el.querySelectorAll('th').forEach(th => th.onclick = () => onSort(th.dataset.k));
+  // il clic sulla ⓘ nell'intestazione non deve anche riordinare la tabella:
+  // ci si va sopra per leggere, non per cambiare l'ordinamento
+  el.querySelectorAll('th').forEach(th => th.onclick = e => {
+    if (e.target.closest('.kg-i')) return;
+    onSort(th.dataset.k);
+  });
   if (onRowClick) {
     el.querySelectorAll('tbody tr.rowlink').forEach(tr =>
       tr.onclick = () => onRowClick(rows[+tr.dataset.ri], +tr.dataset.ri));
@@ -57,7 +62,7 @@ const attr = s => String(s == null ? '' : s)
 
 // titolo della tile + ⓘ. L'ultima parola e l'icona restano legate (nowrap): con
 // le etichette lunghe, che vanno a capo, l'icona finirebbe da sola su una riga.
-function labelConInfo(label, info) {
+export function labelConInfo(label, info) {
   const icona = `<button type="button" class="kg-i" data-tip="${attr(info)}"
       aria-label="${attr(label)}: ${attr(info)}">i</button>`;
   const i = String(label).lastIndexOf(' ');

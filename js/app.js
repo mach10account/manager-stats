@@ -9,7 +9,7 @@ import { esc } from './format.js';
 import { initAssistente, resetAssistente } from './assistente.js?v=2';   // ?v da bumpare quando cambia assistente.js
 import * as idle from './idle.js?v=1';   // ?v da bumpare quando cambia idle.js
 
-import * as panoramica from './sections/panoramica.js?v=bench1';   // ?v da bumpare quando cambia panoramica.js
+import * as panoramica from './sections/panoramica.js?v=bench2';   // ?v da bumpare quando cambia panoramica.js
 import * as marketing from './sections/marketing.js';
 import * as coorti from './sections/coorti.js';
 import * as beauty from './sections/beauty.js';

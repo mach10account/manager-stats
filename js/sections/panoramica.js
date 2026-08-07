@@ -3,7 +3,11 @@ import { supabase } from '../supabase.js';
 import { fetchAll, loadCentri, centriMap } from '../data.js';
 import { getFilters } from '../filters.js';
 import { navigate } from '../router.js';
-import { renderTable, renderKpiGroups } from '../tables.js';
+// ?v= su tables.js: labelConInfo è un export NUOVO. Senza, un browser con
+// tables.js ancora in cache (max-age 600) importerebbe un modulo che non ce
+// l'ha e la sezione non si monterebbe affatto. tables.js non ha stato di
+// modulo, quindi la doppia copia con le altre sezioni non fa danno.
+import { renderTable, renderKpiGroups, labelConInfo } from '../tables.js?v=bench1';
 import { fmt, eur, eur2, ratio, safeDiv, pctFrac, esc } from '../format.js';
 
 // ROAS colorato: verde se >= 1 (in utile), rosso se < 1 — il numero resta l'informazione
@@ -21,12 +25,24 @@ const roasCell = v => (v === null || v === undefined || isNaN(v)) ? '—'
 // in rosso sotto un benchmark "≤ 7 €" sembrerebbe un errore della dashboard.
 // Le percentuali si stampano intere (pctFrac), cioè 2 decimali di frazione.
 const BM = {
-  cpl:              { max: 7,    dec: 2, txt: '≤ 7 €' },
-  cpa:              { max: 40,   dec: 0, txt: '≤ 40 €' },
-  cps:              { max: 90,   dec: 0, txt: '≤ 90 €' },
-  pct_risposta:     { min: 0.60, dec: 2, txt: '≥ 60%' },
-  pct_prenotazione: { min: 0.18, dec: 2, txt: '≥ 18%' },
-  pct_show:         { min: 0.45, dec: 2, txt: '≥ 45%' },
+  cpl: { max: 7, dec: 2, txt: '≤ 7 €',
+    info: 'Benchmark: CPL fino a 7 €. Rosso sopra. Si calcola come spesa ads ÷ lead FB '
+      + '(i lead dichiarati da Facebook, non quelli poi validati in Notion).' },
+  cpa: { max: 40, dec: 0, txt: '≤ 40 €',
+    info: 'Benchmark: CPA fino a 40 €. Rosso sopra. Si calcola come spesa ads ÷ appuntamenti fissati '
+      + 'nel periodo — costo per appuntamento preso, non per appuntamento presentato.' },
+  cps: { max: 90, dec: 0, txt: '≤ 90 €',
+    info: 'Benchmark: CPS fino a 90 €. Rosso sopra. Si calcola come spesa ads ÷ presenze: '
+      + 'quanto costa una persona che si presenta davvero in centro.' },
+  pct_risposta: { min: 0.60, dec: 2, txt: '≥ 60%',
+    info: 'Benchmark: almeno il 60% dei lead risponde. Rosso sotto. Si calcola come lead che hanno '
+      + 'risposto ÷ lead reali; la risposta è quella registrata sulle chiamate del CRM.' },
+  pct_prenotazione: { min: 0.18, dec: 2, txt: '≥ 18%',
+    info: 'Benchmark: almeno il 18% dei lead prende appuntamento. Rosso sotto. Si calcola come '
+      + 'appuntamenti fissati ÷ lead reali, non sui lead FB: il setter lavora quelli veri.' },
+  pct_show: { min: 0.45, dec: 2, txt: '≥ 45%',
+    info: 'Benchmark: almeno il 45% degli appuntamenti si presenta. Rosso sotto. Si calcola come '
+      + 'presenze ÷ (presenze + no show), quindi solo sugli appuntamenti arrivati a scadenza.' },
 };
 const fuoriBench = (v, b) => {
   const p = Math.pow(10, b.dec);
@@ -36,8 +52,9 @@ const fuoriBench = (v, b) => {
 // fmt di una colonna con benchmark
 const bench = (key, base) => v => (v === null || v === undefined || isNaN(v)) ? '—'
   : (fuoriBench(v, BM[key]) ? `<span class="val-bad">${base(v)}</span>` : base(v));
-// etichetta di colonna col benchmark accanto, così il rosso si spiega da sé
-const lblBench = (key, label) => `${label} <span class="th-bm">${BM[key].txt}</span>`;
+// etichetta di colonna con la ⓘ: la soglia si legge in hover, l'intestazione
+// resta pulita (la tabella ha già venti colonne)
+const lblBench = (key, label) => labelConInfo(label, BM[key].info);
 
 let sort = { key: 'spesa', dir: -1 };
 let search = '';
