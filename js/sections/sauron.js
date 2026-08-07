@@ -425,7 +425,7 @@ function renderKPI() {
   const costoTeam = sumImporti(teamDel);
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
-    { step: 1, title: 'Incassato', tiles: [
+    { title: 'Incassato', tiles: [
       { label: 'Incassato del mese', value: eur(s.tot), hero: true, info: delta(s.tot, sPrev.tot) || (fmt(s.n) + ' rate incassate') },
       { label: 'Nuovi clienti — 1ª rata pagata', value: eur(s.nuovi),
         info: fmt(s.nuoviIds.size) + (s.nuoviIds.size === 1 ? ' cliente partito' : ' clienti partiti') + ' nel mese · esclusi rinnovi e upsell' },
@@ -436,7 +436,7 @@ function renderKPI() {
       { label: 'Upsell', value: eur(s.upsell), info: 'rate incassate nel mese su contratti col tag UPSELL '
         + '(e senza tag RINNOVO, che ha la precedenza)' },
     ] },
-    { step: 2, title: 'Contrattualizzato', tiles: [
+    { title: 'Contrattualizzato', tiles: [
       { label: 'Contrattualizzato del mese', value: eur(c.tot), hero: true, info: delta(c.tot, cPrev.tot) || 'valore dei contratti creati nel mese' },
       { label: 'Contratti firmati', value: fmt(c.n), info: c.nuovi + ' nuovi · ' + c.rinnovi + ' rinnovi · ' + c.upsell + ' upsell' },
       { label: 'Ticket medio', value: eur(safeDiv(c.tot, c.n)),
@@ -444,7 +444,7 @@ function renderKPI() {
       { label: 'Valore rinnovi', value: eur(c.rinnoviVal),
         info: 'somma del valore dei contratti col tag RINNOVO creati nel mese' },
     ] },
-    { step: 3, title: 'Da incassare', tiles: [
+    { title: 'Da incassare', tiles: [
       { label: 'Rate da incassare nel mese', value: eur(sc.daIncassare), hero: true,
         info: fmt(sc.nRate) + ' rate in scadenza a ' + ymLabel(MESE) + ' non ancora incassate' },
       { label: 'Previsto nel mese', value: eur(sc.previsto), info: 'tutte le rate in scadenza nel mese' },
@@ -465,7 +465,7 @@ function renderKPI() {
             + ' Arretrato: ' + eur(insTot.nonIncassate) + ', tutte le rate scadute fino al ' + dtIt(ins.cut)
             + ' e mai incassate.' },
     ] },
-    { step: 4, title: 'Commerciale', tiles: [
+    { title: 'Commerciale', tiles: [
       { label: 'Nuovi clienti', value: fmt(c.nuovi), hero: true, info: 'contratti nuovi creati nel mese' },
       { label: 'Clienti rinnovati', value: fmt(c.rinnovi), info: 'contratti di rinnovo creati nel mese' },
       { label: 'Upsell effettuati', value: fmt(c.upsell),
@@ -478,7 +478,7 @@ function renderKPI() {
       { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
         info: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
     ] },
-    { step: 5, title: 'Azienda', wide: true, tiles: [
+    { title: 'Azienda', wide: true, tiles: [
       { label: 'Riempimento team', value: riempTot.quota === null ? '—' : pctFrac(riempTot.quota), hero: true,
         tone: riempTot.quota === null ? undefined
           : (riempTot.quota >= 0.95 ? 'bad' : (riempTot.quota >= 0.75 ? undefined : 'good')),
