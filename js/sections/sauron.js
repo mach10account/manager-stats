@@ -655,8 +655,90 @@ const costoCols = rep => {
   return cols;
 };
 
+// Sui mesi che stanno sul foglio i costi VERI sono quelli dichiarati lì: il
+// registro è lo stato di OGGI (voci mensili che partono da gennaio 2026) e su
+// aprile mostrava 33.463 € contro i 75.355 € del foglio — mancano ad spend,
+// parte fissa dei setter, compensi amministratori, straordinari.
+// Stessa regola del tab P&L: mese chiuso = foglio, mese in corso = registro.
+// I costi del foglio NON si importano nel registro: quelle voci ricorrenti
+// valgono anche sui mesi passati, quindi le conterebbe due volte.
+let COSTI_VISTA = null;                       // 'registro' = forza il registro dove c'è il foglio
+const SEZ_COSTI = [
+  ['diretti', 'Costi diretti', 'variabili col fatturato'],
+  ['operativi', 'Costi operativi', 'struttura, fissi'],
+  ['strutturali', 'Costi strutturali', ''],
+  ['rimborsi', 'Storni e rimborsi', ''],
+];
+
+const chipFonteCosti = () => `<div class="lead-tabs" id="fnCostiFonte">
+    <button data-v="foglio">Foglio P&L</button>
+    <button data-v="registro">Registro costi (stato di oggi)</button>
+  </div>`;
+
+function legaChipCosti(fonte) {
+  _mount.querySelectorAll('#fnCostiFonte button').forEach(b => {
+    b.classList.toggle('active', b.dataset.v === fonte);
+    b.onclick = () => { COSTI_VISTA = b.dataset.v; renderCostiPage(); };
+  });
+}
+
+function renderCostiFoglio(content, righe) {
+  const tot = {};
+  for (const s of SEZ_COSTI) tot[s[0]] = sommaSez(righe, s[0]);
+  const totale = SEZ_COSTI.reduce((a, s) => a + tot[s[0]], 0);
+  const vociDi = sez => righe.filter(r => r.sezione === sez).sort((a, b) => a.ordine - b.ordine);
+
+  content.innerHTML = `
+    <div class="kpi-row" id="fnCostiKpi"></div>
+
+    <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="margin-right:auto">
+        <h2 style="margin-bottom:2px">Totale costi — ${ymLabel(MESE)}</h2>
+        <div class="subtitle" style="margin-bottom:0">Voci <strong>dichiarate</strong> sul foglio
+          "PL Database Input", come stanno lì. Sul mese chiuso è il dato ufficiale: il registro
+          dell'app non ha storico e da solo darebbe un costo molto più basso.</div>
+      </div>
+      <div style="font-size:28px;font-weight:700">${eur(totale)}</div>
+    </div>
+
+    ${chipFonteCosti()}
+
+    ${SEZ_COSTI.filter(s => vociDi(s[0]).length).map(s => `
+    <div class="card">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <h2 style="margin-right:auto">${s[1]} · ${eur(tot[s[0]])}</h2>
+      </div>
+      ${s[2] ? `<div class="subtitle">${s[2]}</div>` : ''}
+      <div class="table-scroll"><table class="fn-pnl">
+        <thead><tr><th>Voce</th><th>${ymLabel(MESE)}</th><th>% dei costi</th></tr></thead>
+        <tbody>${vociDi(s[0]).map(r => `<tr>
+          <td class="name"${r.tipo === 'dettaglio' ? ' style="padding-left:26px;color:var(--muted)"' : ''}>${esc(r.voce)}</td>
+          <td>${r.importo === null ? '—' : eur(r.importo)}</td>
+          <td class="fn-quota">${r.tipo === 'dettaglio' || r.importo === null || totale <= 0 ? '' : fmtPct(pct(Math.abs(r.importo), totale))}</td>
+        </tr>`).join('')}
+        <tr class="fn-tot"><td class="name">Totale ${s[1].toLowerCase()}</td>
+          <td>${eur(tot[s[0]])}</td><td class="fn-quota">${fmtPct(pct(tot[s[0]], totale))}</td></tr>
+        </tbody>
+      </table></div>
+    </div>`).join('')}
+
+    <div class="card">
+      <div class="subtitle">Le righe indentate sono i "di cui" del foglio: sono informative e non si
+        sommano. Per modificare qualcosa si tocca il foglio, non l'app — qui il mese chiuso è in sola
+        lettura. Il registro modificabile è sotto il chip "Registro costi", e serve per il mese in corso.</div>
+    </div>`;
+
+  renderKpiRow(_mount.querySelector('#fnCostiKpi'),
+    SEZ_COSTI.map(s => ({ label: s[1], value: eur(tot[s[0]]),
+      sub: totale > 0 ? fmtPct(pct(tot[s[0]], totale)) + ' del totale' : '' }))
+      .concat([{ label: 'Totale costi', value: eur(totale), sub: 'dal foglio P&L di ' + ymLabel(MESE) }]));
+  legaChipCosti('foglio');
+}
+
 function renderCostiPage() {
   const content = _mount.querySelector('#fnContent');
+  const fgCosti = vociFoglio(MESE);
+  if (fgCosti.length && COSTI_VISTA !== 'registro') return renderCostiFoglio(content, fgCosti);
   const cm = costiMese(MESE);
   const byRep = r => cm.occ.filter(x => (x.reparto || 'Fissi') === r);
   const totRep = {};
@@ -673,8 +755,25 @@ function renderCostiPage() {
     Extra: 'spese una tantum del mese (consulenze, viaggi, formazione, rimborsi…)',
   };
 
+  // il registro è lo stato di OGGI: su un mese passato mancano per forza le voci
+  // che allora c'erano e adesso no (ad spend, setter, amministratori). Se il mese
+  // ha il foglio lo si dice e si offre il ritorno; se non ce l'ha, resta l'avviso.
+  const passato = MESE < dstr(todayRome()).slice(0, 7);
+  const avviso = fgCosti.length
+    ? `⚠️ Stai guardando il <strong>registro</strong>, ma per ${ymLabel(MESE)} il costo vero è quello
+       dichiarato sul foglio (${eur(sommaSez(fgCosti, 'diretti') + sommaSez(fgCosti, 'operativi')
+         + sommaSez(fgCosti, 'strutturali') + sommaSez(fgCosti, 'rimborsi')}). Qui sotto vedi solo le voci
+       che esistono oggi nel registro.`
+    : (passato
+      ? `⚠️ ${ymLabel(MESE)} è un mese passato e <strong>non è sul foglio P&L</strong>: queste voci sono
+         lo stato di OGGI applicato all'indietro, quindi il totale è sottostimato — mancano l'ad spend,
+         la parte fissa dei setter e i compensi amministratori. Non usarlo per decidere.`
+      : '');
+
   content.innerHTML = `
     <div class="kpi-row" id="fnCostiKpi"></div>
+    ${avviso ? `<div class="card" style="border-color:var(--warn)"><div class="subtitle" style="margin:0">${avviso}</div></div>` : ''}
+    ${fgCosti.length ? chipFonteCosti() : ''}
     <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div style="margin-right:auto">
         <h2 style="margin-bottom:2px">Totale costi — ${ymLabel(MESE)}</h2>
@@ -737,6 +836,7 @@ function renderCostiPage() {
 
   content.querySelectorAll('button[data-nuovo]').forEach(b =>
     b.onclick = () => apriFormCosto(null, b.dataset.nuovo));
+  if (fgCosti.length) legaChipCosti('registro');
 }
 
 // ── form voce di costo ───────────────────────────────────────────────────────
