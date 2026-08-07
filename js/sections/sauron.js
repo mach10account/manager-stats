@@ -509,11 +509,12 @@ function renderKPI() {
 // sei. Due copie di questi testi si allontanerebbero al primo ritocco.
 function tileDelivery() {
   const rc = rinnoviChurn();
-  const ch4 = churnUltimi(MESI_KPI, rc.righe);
-  const ch12 = churnUltimi(12, rc.righe);
-  const recenti = rc.righe.slice(-MESI_KPI);
-  const rinRec = recenti.reduce((a, r) => a + r.rinnovi, 0);
-  const persiRec = recenti.reduce((a, r) => a + r.persi, 0);
+  // churn e rinnovi del MESE SELEZIONATO, come ogni altro numero di Sauron. Una
+  // finestra a 4 o 12 mesi qui confonderebbe: con la regola "un rinnovo vale
+  // sempre" le coorti migliorano invecchiando, quindi una finestra lunga esce
+  // più bassa solo perché contiene mesi vecchi, non perché si lavori meglio.
+  // Il confronto tra mesi si legge nel grafico e nella tabella qui sotto.
+  const m = rc.righe[rc.righe.length - 1] || { churn: null, tasso: null, scaduti: 0, nonRinnovati: 0, rinnovi: 0, persi: 0 };
   const gestiti = centriRows().filter(isGestito);
   const senzaPM = gestiti.filter(x => !x.consulente).length;
   // per PERSONA: due email dello stesso PM non sono due project manager
@@ -539,21 +540,20 @@ function tileDelivery() {
     costoCliente: { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti.length)), sub: 'solo team delivery',
       info: 'costo del team delivery ÷ clienti in gestione. Solo il delivery: non ci sono marketing, '
         + 'commerciale, struttura né commissioni.' },
-    rinnovo: { label: 'Tasso di rinnovo ' + MESI_KPI + ' mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
-      sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti',
-      info: 'rinnovi ÷ (rinnovi + clienti persi) negli ultimi ' + MESI_KPI + ' mesi. I rinnovi sono i '
-        + 'contratti col tag RINNOVO per data di creazione, i persi vanno per DATA CLIENTE PERSO: sono '
-        + 'due date diverse, quindi NON è il complemento del churn qui accanto.' },
-    churn: { label: 'Churn ' + MESI_KPI + ' mesi', value: fmtPct(ch4.quota),
-      tone: ch4.quota === null ? undefined : (ch4.quota >= 50 ? 'bad' : undefined),
-      sub: ch4.nonRinnovati + ' non rinnovati su ' + fmt(ch4.scaduti) + ' contratti scaduti'
-        + (ch12.quota === null ? '' : ' · su 12 mesi è ' + fmtPct(ch12.quota)),
-      info: 'dei contratti arrivati a fine servizio negli ultimi ' + MESI_KPI + ' mesi, quanti NON hanno '
-        + 'mai avuto un contratto successivo per lo stesso centro. Senza limiti di tempo: se il cliente '
-        + 'rifirma sei mesi dopo, il churn del mese in cui era scaduto scende. Su 12 mesi è '
-        + fmtPct(ch12.quota) + '. Gli ultimi mesi sono i più alti perché quasi nessun rinnovo è ancora '
-        + 'stato firmato (arriva in media 30 giorni dopo la fine servizio): nella tabella della tab '
-        + 'Delivery sono marcati, e possono solo scendere.' },
+    rinnovo: { label: 'Tasso di rinnovo', value: fmtPct(m.tasso),
+      sub: m.rinnovi + ' rinnovi · ' + m.persi + ' persi a ' + ymLabel(MESE),
+      info: 'rinnovi ÷ (rinnovi + clienti persi) di ' + ymLabel(MESE) + '. I rinnovi sono i contratti col '
+        + 'tag RINNOVO per data di creazione, i persi vanno per DATA CLIENTE PERSO: sono due date diverse, '
+        + 'quindi NON è il complemento del churn qui accanto.' },
+    churn: { label: 'Churn', value: fmtPct(m.churn),
+      tone: m.churn === null ? undefined : (m.churn >= 50 ? 'bad' : undefined),
+      sub: m.nonRinnovati + ' non rinnovati su ' + fmt(m.scaduti) + ' contratti scaduti a ' + ymLabel(MESE)
+        + (m.provvisorio ? ' · i rinnovi devono ancora arrivare' : ''),
+      info: 'dei contratti arrivati a fine servizio a ' + ymLabel(MESE) + ', quanti NON hanno mai avuto un '
+        + 'contratto successivo per lo stesso centro. Senza limiti di tempo: se il cliente rifirma sei mesi '
+        + 'dopo, questo numero scende. ⚠️ Un mese appena passato parte sempre alto — la firma del rinnovo '
+        + 'arriva in media 30 giorni dopo la fine del servizio — e cala col tempo: guarda il grafico qui '
+        + 'sotto per il confronto tra i mesi, non questo numero da solo.' },
   };
 }
 
@@ -1484,7 +1484,6 @@ async function salvaCapacita(ruolo, persona_id, valore) {
 // quelli in cui la gran parte dei rinnovi non è ancora stata firmata (la firma
 // arriva in media 30 giorni dopo la fine del servizio).
 const GRAZIA_RINNOVO = 60;
-const MESI_KPI = 4;                           // finestra corta dei KPI in cima (la tabella resta a 12)
 const piuGiorni = (iso, n) => {
   const d = new Date(iso + 'T00:00:00');
   d.setDate(d.getDate() + n);
