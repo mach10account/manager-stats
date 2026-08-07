@@ -517,8 +517,11 @@ function tileDelivery() {
   const m = rc.righe[rc.righe.length - 1] || { churn: null, tasso: null, scaduti: 0, nonRinnovati: 0, rinnovi: 0, persi: 0 };
   const gestiti = centriRows().filter(isGestito);
   const senzaPM = gestiti.filter(x => !x.consulente).length;
-  // per PERSONA: due email dello stesso PM non sono due project manager
-  const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean).map(chiavePersona)).size;
+  // per PERSONA: due email dello stesso PM non sono due project manager. Chi è
+  // stato nascosto col bottone in Delivery non conta (su Notion ha dei centri,
+  // ma il project manager non lo fa).
+  const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean)
+    .filter(raw => !escluso('PM', personaDi(raw))).map(chiavePersona)).size;
   const teamDel = costiMese(MESE).occ.filter(x => (x.reparto || '') === 'Delivery');
   const costoTeam = sumImporti(teamDel);
   const postiPM = riempimentoRuolo('PM').posti;
@@ -1332,10 +1335,13 @@ const NON_ASSEGNATO = '(non assegnato)';
 const USCITI = '(non più nel team)';
 
 let CAP = new Map();                          // "RUOLO|persona_id" → capienza
+let ESCLUSI = new Set();                      // "RUOLO|persona_id" nascosti dal ruolo
 function rebuildCap() {
   CAP = new Map();
+  ESCLUSI = new Set();
   for (const c of (DATA && DATA.capacita ? DATA.capacita : [])) {
     CAP.set(c.ruolo + '|' + c.persona_id, +c.capacita || 0);
+    if (c.escluso) ESCLUSI.add(c.ruolo + '|' + c.persona_id);
   }
 }
 const capDi = (ruolo, pid) => {
@@ -1343,6 +1349,10 @@ const capDi = (ruolo, pid) => {
   return v === undefined ? RUOLO(ruolo).def : v;
 };
 const capImpostata = (ruolo, pid) => CAP.has(ruolo + '|' + pid);
+// nascosto dal bottone "Nascondi": su Notion ha dei clienti in questo ruolo, ma
+// quel ruolo non lo fa. Non conta come persona del reparto e non entra nel
+// riempimento; i suoi clienti restano dove sono.
+const escluso = (ruolo, pid) => pid !== null && ESCLUSI.has(ruolo + '|' + pid);
 
 // una riga per persona del ruolo, col suo carico, i suoi rinnovi e la sua capienza
 function caricoPerRuolo(ruolo) {
@@ -1398,6 +1408,7 @@ function caricoPerRuolo(ruolo) {
     // su cosa si misura la capienza di questo ruolo
     a.carico = R.base === 'attive' ? a.attive : (R.base === 'operativo' ? a.operativi : a.gestiti);
     a.capacita = a.persona_id === null ? null : capDi(ruolo, a.persona_id);
+    a.escluso = escluso(ruolo, a.persona_id);
     a.saturazione = a.capacita > 0 ? a.carico / a.capacita * 100 : null;
     a.perCliente = a.gestiti > 0 ? a.incassato / a.gestiti : null;
     if (a.chiave === USCITI && a.usciti.size) {
@@ -1411,7 +1422,7 @@ function caricoPerRuolo(ruolo) {
 function riempimentoRuolo(ruolo) {
   const R = RUOLO(ruolo);
   const righe = caricoPerRuolo(ruolo);
-  const persone = righe.filter(r => r.persona_id !== null && personaAttiva(r.persona_id)
+  const persone = righe.filter(r => r.persona_id !== null && personaAttiva(r.persona_id) && !r.escluso
                                     && (r.gestiti > 0 || capImpostata(ruolo, r.persona_id)));
   const posti = persone.reduce((a, r) => a + (r.capacita || 0), 0);
   const assegnati = persone.reduce((a, r) => a + r.carico, 0);
@@ -1451,6 +1462,15 @@ const colsRuolo = ruolo => {
     { key: 'persi12m', label: 'Persi (12 mesi)', fmt },
   ];
   if (ruolo === 'PM') cols.push({ key: 'incassato', label: 'Incassato del mese', fmt: eur });
+  // ultima colonna: togliere dal conteggio chi questo ruolo non lo fa davvero.
+  // Su "(non assegnato)" e sugli usciti non c'è niente da nascondere.
+  cols.push({ key: 'escluso', label: '',
+    fmt: (v, r) => r.persona_id === null ? ''
+      : `<button type="button" class="esc-btn${v ? ' attivo' : ''}"
+          data-ruolo="${esc(r.ruolo)}" data-persona="${esc(r.persona_id)}" data-val="${v ? '0' : '1'}"
+          title="${v ? esc(r.pm) + ' non conta come ' + esc(RUOLO(r.ruolo).plur) + ': rimettilo nel conteggio'
+                    : 'Togli ' + esc(r.pm) + ' dal conteggio dei ' + esc(RUOLO(r.ruolo).plur) + ' (i suoi clienti restano)'}"
+          >${v ? 'Mostra' : 'Nascondi'}</button>` });
   return cols;
 };
 
@@ -1460,8 +1480,25 @@ async function salvaCapacita(ruolo, persona_id, valore) {
   const { error } = await supabase.from('fin_capacita')
     .upsert({ ruolo, persona_id, capacita: n, updated_at: new Date().toISOString() }, { onConflict: 'ruolo,persona_id' });
   if (error) { alert('Non sono riuscito a salvare la capienza: ' + error.message); return; }
+  aggiornaRigaCap(ruolo, persona_id, { capacita: n });
+}
+
+// "Nascondi": la persona esce dal conteggio del ruolo. capacita è NOT NULL, quindi
+// se la riga non esiste ancora va creata con la capienza corrente (il default del
+// ruolo), altrimenti l'insert fallisce.
+async function salvaEscluso(ruolo, persona_id, val) {
+  const { error } = await supabase.from('fin_capacita')
+    .upsert({ ruolo, persona_id, capacita: capDi(ruolo, persona_id), escluso: !!val,
+              updated_at: new Date().toISOString() }, { onConflict: 'ruolo,persona_id' });
+  if (error) { alert('Non sono riuscito a salvare: ' + error.message); return; }
+  aggiornaRigaCap(ruolo, persona_id, { capacita: capDi(ruolo, persona_id), escluso: !!val });
+}
+
+// aggiorna la copia locale di fin_capacita e ridisegna, senza rifare la fetch
+function aggiornaRigaCap(ruolo, persona_id, patch) {
+  const vecchia = (DATA.capacita || []).find(c => c.ruolo === ruolo && c.persona_id === persona_id) || {};
   DATA.capacita = (DATA.capacita || []).filter(c => !(c.ruolo === ruolo && c.persona_id === persona_id))
-    .concat([{ ruolo, persona_id, capacita: n }]);
+    .concat([{ ...vecchia, ruolo, persona_id, ...patch }]);
   rebuildCap();
   renderDelivery();
 }
@@ -1574,8 +1611,9 @@ function renderDelivery() {
     const tutte = caricoPerRuolo(R.key);
     // il metro è lo stesso della colonna Saturazione: i clienti su cui si lavora
     // adesso. Una capienza a 0 non tiene in elenco: significa "non fa questo ruolo".
-    const conCarico = r => r.carico > 0
-      || (capImpostata(R.key, r.persona_id) && capDi(R.key, r.persona_id) > 0);
+    // Chi è stato nascosto col bottone esce comunque, e torna con "Mostra tutti".
+    const conCarico = r => !r.escluso && (r.carico > 0
+      || (capImpostata(R.key, r.persona_id) && capDi(R.key, r.persona_id) > 0));
     nascoste += tutte.filter(r => !conCarico(r)).length;
     perRuoloRighe[R.key] = mostraSenzaCarico ? tutte : tutte.filter(conCarico);
   });
@@ -1713,6 +1751,12 @@ function renderDelivery() {
     inp.onchange = () => salvaCapacita(inp.dataset.ruolo, inp.dataset.persona, inp.value);
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
     inp.onclick = e => e.stopPropagation();     // non far partire l'ordinamento della riga
+  });
+  _mount.querySelectorAll('button.esc-btn').forEach(b => {
+    b.onclick = e => {
+      e.stopPropagation();
+      salvaEscluso(b.dataset.ruolo, b.dataset.persona, b.dataset.val === '1');
+    };
   });
 
   const elR = _mount.querySelector('#fnRuoli');

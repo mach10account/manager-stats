@@ -1002,6 +1002,15 @@ select.ac-vede {
   border: 1px solid var(--grid); border-radius: 7px;
 }
 .cap-inp:focus { outline: none; border-color: var(--accent, #2270d8); }
+/* "Nascondi": toglie una persona dal conteggio di un ruolo. Discreto — si nota
+   solo quando lo cerchi, perché è un'azione rara e non un'azione di riga. */
+.esc-btn {
+  font: inherit; font-size: 11.5px; font-weight: 600; padding: 2px 9px; cursor: pointer;
+  color: var(--muted); background: transparent;
+  border: 1px solid var(--grid); border-radius: 999px; white-space: nowrap;
+}
+.esc-btn:hover { color: var(--text-primary); border-color: var(--muted); }
+.esc-btn.attivo { color: var(--series-1); border-color: var(--series-1); }
 .fn-rank { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
 .fn-rank-card h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
 .fn-export-row {
