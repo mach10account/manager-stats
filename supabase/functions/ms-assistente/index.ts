@@ -307,6 +307,9 @@ Deno.serve(async (req: Request) => {
   }
 
   // Controllo di salute: dice cosa e' configurato senza rivelare nulla.
+  // Con {diagnostica: "completa"} prova davvero il modello: e' l'unico modo di
+  // sapere che la chiave e' valida e che l'account arriva a Opus 5 senza dover
+  // fare una domanda vera da un account del team.
   if (corpo.diagnostica) {
     let lettura = "ok";
     try {
@@ -314,12 +317,32 @@ Deno.serve(async (req: Request) => {
     } catch (e) {
       lettura = e instanceof Error ? e.message : String(e);
     }
+    let modelloRisponde: string | undefined;
+    if (corpo.diagnostica === "completa" && chiave) {
+      try {
+        const c = new Anthropic({ apiKey: chiave });
+        const r = await c.messages.create({
+          model: MODELLO,
+          max_tokens: 16,
+          messages: [{ role: "user", content: "Rispondi con la sola parola: pronto" }],
+        } as never);
+        const t = r.content
+          .filter((b: { type: string }) => b.type === "text")
+          .map((b: { text: string }) => b.text)
+          .join("")
+          .trim();
+        modelloRisponde = `ok — ha detto "${t}" (${r.model})`;
+      } catch (e) {
+        modelloRisponde = `NO — ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
     return json({
       chiave_anthropic: !!chiave,
       url_supabase: !!SUPABASE_URL,
       apikey_iniettata: !!ANON,
       modello: MODELLO,
       lettura_kb: lettura,
+      modello_risponde: modelloRisponde,
     });
   }
 
