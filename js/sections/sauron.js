@@ -379,9 +379,6 @@ function renderKPI() {
   // commerciale: churn dai contratti scaduti non rinnovati · azienda: riempimento
   // sulle capienze impostate persona per persona nella tab Delivery (fin_capacita)
   const persiMese = centriRows().filter(x => x.data_cliente_perso && ymOf(x.data_cliente_perso) === MESE).length;
-  const rcDash = rinnoviChurn();
-  const ch4 = churnUltimi(MESI_KPI, rcDash.righe);
-  const ch12 = churnUltimi(12, rcDash.righe);
   const gestiti = centriRows().filter(isGestito);
   const riempR = {};
   RUOLI_CAP.forEach(R => { riempR[R.key] = riempimentoRuolo(R.key); });
@@ -413,6 +410,19 @@ function renderKPI() {
   // sembra che dashboard e tab P&L si contraddicano.
   const fonteTxt = p.fonte === 'foglio'
     ? 'dal foglio P&L del mese' : 'da incassi Notion + registro costi';
+
+  // rinnovi/churn e carico del delivery: i conti stanno in rinnoviChurn(), qui
+  // servono solo le due finestre (4 mesi in evidenza, 12 come riferimento).
+  const rc = rinnoviChurn();
+  const ch4 = churnUltimi(MESI_KPI, rc.righe);
+  const ch12 = churnUltimi(12, rc.righe);
+  const recenti = rc.righe.slice(-MESI_KPI);
+  const rinRec = recenti.reduce((a, r) => a + r.rinnovi, 0);
+  const persiRec = recenti.reduce((a, r) => a + r.persi, 0);
+  // per PERSONA: due email dello stesso PM non sono due project manager
+  const nPM = new Set(gestiti.map(x => x.consulente).filter(Boolean).map(chiavePersona)).size;
+  const teamDel = cm.occ.filter(x => (x.reparto || '') === 'Delivery');
+  const costoTeam = sumImporti(teamDel);
 
   renderKpiGroups(_mount.querySelector('#fnKpi'), [
     { step: 1, title: 'Incassato', tiles: [
@@ -463,6 +473,10 @@ function renderKPI() {
           + MESI_KPI + ' mesi non hanno avuto un contratto successivo entro ' + GRAZIA_RINNOVO
           + ' giorni dalla fine. Su 12 mesi è ' + fmtPct(ch12.quota) + '. I mesi ancora dentro i '
           + GRAZIA_RINNOVO + ' giorni possono solo scendere: il dettaglio mese per mese è in Delivery.' },
+      { label: 'Tasso di rinnovo ' + MESI_KPI + ' mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
+        info: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti negli ultimi ' + MESI_KPI
+          + ' mesi (rinnovi firmati + clienti segnati persi). Conto diverso dal churn: '
+          + 'non è il suo complemento.' },
       { label: 'Ticket medio nuovi', value: eur(safeDiv(c.nuoviVal, c.nuovi)), info: 'valore medio dei contratti nuovi' },
       { label: 'Incassato medio alla 1ª rata', value: eur(safeDiv(s.nuovi, s.nuoviIds.size)),
         info: s.nuoviIds.size + ' nuovi clienti hanno pagato la 1ª rata nel mese' },
@@ -479,7 +493,16 @@ function renderKPI() {
       tileRiemp(RUOLI_CAP[0]),
       tileRiemp(RUOLI_CAP[1]),
       tileRiemp(RUOLI_CAP[2]),
-      { label: 'Aziende gestite', value: fmt(gestiti.length), info: 'tutti gli stati tranne CLIENTE PERSO/SPARITO' },
+      { label: 'Clienti in gestione', value: fmt(gestiti.length),
+        info: 'tutti gli stati tranne CLIENTE PERSO/SPARITO · ' + nPM + ' project manager attivi' },
+      { label: 'Media per PM', value: fmt1(safeDiv(gestiti.length, nPM)),
+        info: 'clienti in gestione ÷ project manager. Comprende i ' + fmt(gestiti.filter(x => !x.consulente).length)
+          + ' senza consulente e i clienti parcheggiati: il carico vero, sul portafoglio operativo, '
+          + 'è nella tab Delivery · posti PM impostati: ' + fmt(riempR.PM.posti) },
+      { label: 'Costo team delivery', value: eur(costoTeam),
+        info: teamDel.length + ' persone/voci nel registro costi con reparto Delivery, commissioni escluse' },
+      { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti.length)),
+        info: 'costo del team delivery ÷ clienti in gestione' },
       { label: 'Costi del mese', value: eur(p.costiTot),
         info: p.fonte === 'foglio'
           ? 'diretti ' + eur(p.costiDiretti) + ' + operativi ' + eur(p.operativi)
@@ -1493,10 +1516,6 @@ function renderDelivery() {
   const cm = costiMese(MESE);
   const teamDel = cm.occ.filter(c => (c.reparto || '') === 'Delivery');
   const costoTeam = sumImporti(teamDel);
-  const gestiti = rc.gestiti;
-  // per PERSONA: due email dello stesso PM non sono due project manager
-  const nPM = new Set(centriRows().filter(isGestito).map(x => x.consulente).filter(Boolean)
-    .map(chiavePersona)).size;
   const perRuolo = RUOLI_DELIVERY.map(ru => ({
     ruolo: ru,
     voci: teamDel.filter(c => (c.ruolo || 'Altri ruoli') === ru).length,
@@ -1505,21 +1524,14 @@ function renderDelivery() {
   const ultimi = rc.righe.slice(-12);
   const rinTot = ultimi.reduce((a, r) => a + r.rinnovi, 0);
   const persiTot = ultimi.reduce((a, r) => a + r.persi, 0);
-  // il churn vive nella Dashboard (blocco Commerciale); qui restano la tabella
-  // mese per mese e il suo totale a 12 mesi.
+  // i numeri di sintesi (portafoglio, carico, costo, rinnovo, churn) stanno tutti
+  // nella Dashboard: qui restano il dettaglio per persona e la tabella mensile.
   const c12 = churnUltimi(12, ultimi);
   const scadTot = c12.scaduti;
   const nonRinnTot = c12.nonRinnovati;
   const churn12 = c12.quota;
-  // Il tasso di rinnovo in cima guarda solo gli ULTIMI 4 MESI: su 12 pesano
-  // ancora stagioni vecchie e il numero si muove con mesi di ritardo.
-  const recenti = ultimi.slice(-MESI_KPI);
-  const rinRec = recenti.reduce((a, r) => a + r.rinnovi, 0);
-  const persiRec = recenti.reduce((a, r) => a + r.persi, 0);
 
   _mount.querySelector('#fnContent').innerHTML = `
-    <div class="kpi-row" id="fnDelKpi"></div>
-
     <div class="sm-head">
       <div>
         <h2 class="sm-title">Carico del team</h2>
@@ -1596,16 +1608,6 @@ function renderDelivery() {
         su tutto lo storico disponibile.</div>
       <div class="fn-rank" id="fnRank"></div>
     </div>`;
-
-  renderKpiRow(_mount.querySelector('#fnDelKpi'), [
-    { label: 'Clienti in gestione', value: fmt(gestiti), sub: nPM + ' project manager attivi' },
-    { label: 'Media per PM', value: fmt1(safeDiv(gestiti, nPM)),
-      sub: 'posti PM impostati: ' + fmt(riemp.PM.posti) },
-    { label: 'Costo team delivery', value: eur(costoTeam), sub: teamDel.length + ' persone/voci nel mese' },
-    { label: 'Costo per cliente', value: eur(safeDiv(costoTeam, gestiti)), sub: 'solo team delivery' },
-    { label: 'Tasso di rinnovo 4 mesi', value: fmtPct(pct(rinRec, rinRec + persiRec)),
-      sub: rinRec + ' rinnovi su ' + (rinRec + persiRec) + ' esiti' },
-  ]);
 
   RUOLI_CAP.forEach(R => {
     const el = _mount.querySelector('#fnRuolo' + R.key);
