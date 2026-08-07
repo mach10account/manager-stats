@@ -574,9 +574,21 @@ function tileDelivery() {
 }
 
 // ── trend mensile ────────────────────────────────────────────────────────────
+// Il grafico parte dal PRIMO mese che ha i costi sul foglio (oggi aprile 2026):
+// prima di lì l'EBITDA uscirebbe dal registro applicato all'indietro — costi da
+// 17.941 € contro i 75 mila veri, un margine mai esistito. Quando sul foglio
+// entreranno altri mesi la finestra si allunga da sola. Se il foglio è vuoto,
+// o il mese selezionato è più vecchio del foglio, si torna ai 12 mesi.
 function trendRows() {
+  const fogli = (DATA.pnlFoglio || []).map(r => r.mese);
+  const primo = fogli.length ? fogli.reduce((a, b) => (a < b ? a : b)) : null;
+  const daFoglio = !!primo && primo <= MESE;
   const months = [];
-  for (let i = 11; i >= 0; i--) months.push(addYm(MESE, -i));
+  if (daFoglio) {
+    for (let m = primo; m <= MESE && months.length < 37; m = addYm(m, 1)) months.push(m);
+  } else {
+    for (let i = 11; i >= 0; i--) months.push(addYm(MESE, -i));
+  }
   const inc = new Map(months.map(m => [m, 0]));
   const con = new Map(months.map(m => [m, 0]));
   const nCon = new Map(months.map(m => [m, 0]));
@@ -588,7 +600,7 @@ function trendRows() {
     const m = ymOf(c.creazione_contratto);
     if (m !== null && con.has(m)) { con.set(m, con.get(m) + (+c.valore || 0)); nCon.set(m, nCon.get(m) + 1); }
   }
-  return { months, rows: months.map(m => {
+  return { months, daFoglio, rows: months.map(m => {
     const p = pnl(m);                      // EBITDA del mese: stesso calcolo del P&L
     return { incassato: inc.get(m), contrattualizzato: con.get(m), n: nCon.get(m),
              ebitda: p.ebitda, costi: p.costiTot, rimborsi: p.rimborsi, fonte: p.fonte };
@@ -598,7 +610,11 @@ function trendRows() {
 function renderTrend() {
   const el = _mount.querySelector('#fnTrend');
   if (!el) return;
-  const { months, rows } = trendRows();
+  const { months, rows, daFoglio } = trendRows();
+  const rangeEl = _mount.querySelector('#fnTrendRange');
+  if (rangeEl) rangeEl.textContent = daFoglio
+    ? 'Da ' + ymLabel(months[0]) + ' — il primo mese con i costi sul foglio — a ' + ymLabel(MESE)
+    : 'Ultimi 12 mesi fino a ' + ymLabel(MESE);
   renderLineChart(el, months, rows, [
     { key: 'incassato', color: '--series-1', name: 'Incassato' },
     { key: 'contrattualizzato', color: '--series-2', name: 'Contrattualizzato' },
@@ -626,10 +642,10 @@ const DASH_HTML = `
 
   <div class="card">
     <h2>Andamento mensile</h2>
-    <div class="subtitle">Ultimi 12 mesi fino a <span id="fnMeseLabel"></span>: incassato (per data incasso),
-      contrattualizzato (per data di creazione del contratto) ed EBITDA (incassato netto − costi correnti −
-      commissioni, esclusi investimenti e asset). Se l'EBITDA va sotto zero la scala scende con lui e compare
-      la linea tratteggiata dello zero.</div>
+    <div class="subtitle"><span id="fnTrendRange"></span>: incassato (per data incasso),
+      contrattualizzato (per data di creazione del contratto) ed EBITDA — incasso Notion meno i costi,
+      dal foglio P&L sui mesi chiusi e dal registro sul mese in corso. Se l'EBITDA va sotto zero la
+      scala scende con lui e compare la linea tratteggiata dello zero.</div>
     <div class="legend">
       <span class="key"><span class="swatch" style="background:var(--series-1)"></span>Incassato</span>
       <span class="key"><span class="swatch" style="background:var(--series-2)"></span>Contrattualizzato</span>
@@ -640,10 +656,8 @@ const DASH_HTML = `
 
 function renderDash() {
   _mount.querySelector('#fnContent').innerHTML = DASH_HTML;
-  const lab = _mount.querySelector('#fnMeseLabel');
-  if (lab) lab.textContent = ymLabel(MESE);
   renderKPI();
-  renderTrend();
+  renderTrend();   // riempie anche #fnTrendRange nel sottotitolo
 }
 
 // ── tab Costi ────────────────────────────────────────────────────────────────
